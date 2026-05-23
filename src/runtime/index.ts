@@ -10,6 +10,7 @@ import {
   encodeControl,
   encodeFullSnapshot,
   encodeSnapshotOps,
+  encodeSnapshotOpsBatched,
   hasSnapshotOps,
   MessageType,
   peekMessageType,
@@ -26,6 +27,7 @@ export interface SyncHostOptions {
   readonly registry: RegistryLike;
   readonly logger?: Logger;
   readonly sendRate?: number;
+  readonly snapshotEncoding?: "default" | "batched";
   readonly isVisible?: (peer: PeerRef, entityId: number) => boolean;
   readonly canReusePeerSnapshots?: () => boolean;
 }
@@ -236,7 +238,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
             peer,
             "unreliable",
             encodedPacket(encodedUpdates, "u", updates, () =>
-              encodeSnapshotOps(options.world, tick, updates),
+              encodeUpdateSnapshotOps(options, tick, updates),
             ),
           );
         }
@@ -282,11 +284,21 @@ function trySendSharedUpdate(
     }
   }
 
-  const bytes = encodeSnapshotOps(options.world, tick, { updated: dirty.updated });
+  const bytes = encodeUpdateSnapshotOps(options, tick, { updated: dirty.updated });
   for (const peer of peers) {
     options.transport.send(peer, "unreliable", bytes);
   }
   return true;
+}
+
+function encodeUpdateSnapshotOps(
+  options: SyncHostOptions,
+  tick: number,
+  ops: SnapshotWriteOps,
+): Uint8Array {
+  return options.snapshotEncoding === "batched"
+    ? encodeSnapshotOpsBatched(options.world, tick, ops)
+    : encodeSnapshotOps(options.world, tick, ops);
 }
 
 function encodedPacket(

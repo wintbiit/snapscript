@@ -201,28 +201,6 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 
 World handles are frozen runtime objects. Keep non-replicated host application state in your own objects.
 
-When a helper only needs to read replicated state, type it as `ReplicatedStateReader`. Both `HostWorld`
-and `ClientWorld` satisfy this read-only surface, so render snapshots and debug inspectors can share one
-implementation without casts:
-
-```ts
-import type { ComponentQuery, ReplicatedStateReader } from "snapscript";
-
-const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
-
-function collectViews(state: ReplicatedStateReader) {
-  const views: { id: number; x: number; hp: number }[] = [];
-  state.each(RenderQuery, (entity, position, health) => {
-    views.push({
-      id: entity.id,
-      x: position.x.value,
-      hp: health.hp.value,
-    });
-  });
-  return views;
-}
-```
-
 ## ECS API
 
 The public ECS surface is intentionally small:
@@ -241,9 +219,9 @@ The public ECS surface is intentionally small:
 
 Use `spawn()` to create entities. `add()` requires an existing entity; it does not create arbitrary raw ids or resurrect destroyed refs.
 
-Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. The `.map()` and `.forEach()` helpers stream storage rows directly, so they are fine for ordinary gameplay code. Use `each()` in hot systems and repeated render/read loops because it still avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
+Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. Use `each()` in hot systems because it avoids materializing public query tuples.
 
-Reusable query tuples should preserve tuple inference. Reusing the same tuple object also lets the runtime cache component ids for hot `each()` loops:
+Reusable query tuples should preserve tuple inference:
 
 ```ts
 import type { ComponentQuery } from "snapscript";
@@ -338,7 +316,7 @@ There is no generic public `Transport` type and no world-level default channel o
 
 Inbound packet bytes are copied when they enter the world queue, so adapters may reuse their receive buffers after invoking `onPacket`. Outbound bytes should be treated as immutable.
 
-Hosts can opt into batched dirty update snapshots:
+Hosts can opt into batched dirty update snapshots when every peer in the session is known to run a compatible SnapScript version:
 
 ```ts
 const hostWorld = createHostWorld({
@@ -349,7 +327,7 @@ const hostWorld = createHostWorld({
 });
 ```
 
-The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates. When enabled, the host still sends batched update packets only to peers that advertise batched snapshot support in SnapScript control messages; older peers automatically receive the default update format.
+The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates, but they use a newer snapshot op. Do not enable them for mixed-version peers unless your transport/session layer has already negotiated support.
 
 ## Visibility And Interest
 
@@ -456,7 +434,7 @@ The current default storage is sparse-set component storage with an archetype qu
 - two-component queries use smallest sparse table lookup
 - wider queries choose between archetype buckets and smallest sparse table
 
-Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Hosts may opt into batched dirty snapshots with `snapshotEncoding: "batched"`; the runtime only sends batched packets to peers that advertised support and falls back per peer otherwise.
+Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Hosts may opt into batched dirty snapshots with `snapshotEncoding: "batched"` after the transport/session layer has confirmed peer compatibility.
 
 The package root intentionally does not export binary readers/writers, raw registry factories, packet codecs, low-level sync runtimes, storage classes, or public `World` constructors.
 

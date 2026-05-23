@@ -179,6 +179,14 @@ describe("single world sync api", () => {
         protocol,
         transport: hostTransport,
         clock: validClock,
+        snapshotEncoding: "always-batch",
+      } as never),
+    ).toThrow(/snapshotEncoding must be "default" or "batched"/);
+    expect(() =>
+      createHostWorld({
+        protocol,
+        transport: hostTransport,
+        clock: validClock,
         interest: true,
       } as never),
     ).toThrow(/interest must be a function/);

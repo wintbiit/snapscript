@@ -329,6 +329,7 @@ export interface HostWorldOptions {
   readonly transport: HostTransport;
   readonly clock: Clock;
   readonly logger?: Logger;
+  readonly snapshotEncoding?: "default" | "batched";
   readonly visibility?: "all" | "none";
   readonly interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
 }
@@ -1940,6 +1941,7 @@ function hostRuntimeOptions(
     registry: registryFromOptions(options),
     isVisible: (peer, entityId) => world.isVisible(peer, entityId),
     canReusePeerSnapshots,
+    snapshotEncoding: options.snapshotEncoding ?? "default",
     ...extra,
   };
 }
@@ -2033,6 +2035,13 @@ function assertHostWorldOptions(options: unknown): asserts options is HostWorldO
   ) {
     throw new Error('createHostWorld() visibility must be "all" or "none"');
   }
+  if (
+    source.snapshotEncoding !== undefined &&
+    source.snapshotEncoding !== "default" &&
+    source.snapshotEncoding !== "batched"
+  ) {
+    throw new Error('createHostWorld() snapshotEncoding must be "default" or "batched"');
+  }
   if (source.interest !== undefined && !isFunction(source.interest)) {
     throw new Error("createHostWorld() interest must be a function");
   }
@@ -2059,6 +2068,7 @@ const hostWorldOptionKeys = new Set([
   "transport",
   "clock",
   "logger",
+  "snapshotEncoding",
   "visibility",
   "interest",
 ]);
