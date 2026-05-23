@@ -219,7 +219,7 @@ The public ECS surface is intentionally small:
 
 Use `spawn()` to create entities. `add()` requires an existing entity; it does not create arbitrary raw ids or resurrect destroyed refs.
 
-Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. Use `each()` in hot systems and repeated render/read loops because it avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
+Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. The `.map()` and `.forEach()` helpers stream storage rows directly, so they are fine for ordinary gameplay code. Use `each()` in hot systems and repeated render/read loops because it still avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
 
 Reusable query tuples should preserve tuple inference. Reusing the same tuple object also lets the runtime cache component ids for hot `each()` loops:
 

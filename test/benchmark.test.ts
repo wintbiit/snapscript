@@ -372,6 +372,16 @@ function renderReadonlyRequiredPairEach(world: ClientWorld): number {
   return checksum === Number.POSITIVE_INFINITY ? 0 : rows;
 }
 
+function renderReadonlyRequiredPairForEach(world: ClientWorld): number {
+  let rows = 0;
+  let checksum = 0;
+  world.query(Position, Health).forEach(([_entity, pos, health]) => {
+    checksum += pos.x.value + pos.y.value + health.hp.value;
+    rows += 1;
+  });
+  return checksum === Number.POSITIVE_INFINITY ? 0 : rows;
+}
+
 function countStorageRows(storage: ComponentStorage, componentIds: readonly number[]): number {
   let rows = 0;
   for (const _row of storage.queryRows(componentIds)) {
@@ -1477,6 +1487,18 @@ describe("benchmark baselines", () => {
         maxMs: eachRenderMeasured.maxMs,
         samples: eachRenderMeasured.samples,
         iterations: eachRenderMeasured.iterations,
+      });
+
+      const pairForEachRenderMeasured = sample(() => renderReadonlyRequiredPairForEach(target));
+      rows.push({
+        name: `${storageName} readonly pair query.forEach render views 50k`,
+        entities: 50_000,
+        rows: pairForEachRenderMeasured.value,
+        ms: pairForEachRenderMeasured.ms,
+        minMs: pairForEachRenderMeasured.minMs,
+        maxMs: pairForEachRenderMeasured.maxMs,
+        samples: pairForEachRenderMeasured.samples,
+        iterations: pairForEachRenderMeasured.iterations,
       });
 
       const pairEachRenderMeasured = sample(() => renderReadonlyRequiredPairEach(target));

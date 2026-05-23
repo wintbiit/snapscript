@@ -57,6 +57,7 @@ Keep examples aligned with these user paths:
 - examples exercise command/event/snapshot behavior, not only render UI
 - the ECS example keeps the optimized `snapshotEncoding: "batched"` path exercised through public APIs
 - repeated render/read loops should use `each()` rather than `query().map()` when they do not need to keep query tuples
+- `query().map()` and `query().forEach()` are acceptable for ordinary readable code, but hot render/system paths should still graduate to `each()`
 - repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
 
@@ -65,7 +66,7 @@ Keep examples aligned with these user paths:
 Performance experiments should be tied back to those same user paths:
 
 - `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
-- `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, and `client readonly pair each render views`.
+- `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
 - `examples/ecs` all-visible batched sync maps to host dirty fanout and slot-backed host dirty fanout benchmarks.
 - bitECS-inspired SOA prototypes are upper-bound comparisons only: they mutate entity-id indexed columns directly, while the public example must keep `world.each()`, readonly clients, dirty snapshots, and schema codecs.
 

@@ -38,7 +38,13 @@ import { DirtyGraph } from "./dirty-graph";
 import { registerWorldInternals, type WorldInternals } from "./internals";
 import { NetRefImpl, type NetRef, type ReadonlyNetRef } from "./net-ref";
 import type { ComponentRecord } from "./records";
-import { SparseSetComponentStorage } from "./storage";
+import {
+  SparseSetComponentStorage,
+  type ComponentDeltaWriter,
+  type ComponentQueryRow,
+  type ComponentRecordFactory,
+  type ComponentStorage,
+} from "./storage";
 
 /** Mutable component instance returned from host-world reads. Write replicated fields through `NetRef.value`. */
 export type ComponentInstance<TFields extends FieldDefinitions> = {
@@ -199,6 +205,10 @@ interface QueryWorldAccess<
     readonly fourth?: ComponentRecord;
     readonly records?: readonly ComponentRecord[];
   }>;
+  _forEachQueryRow(
+    components: readonly ComponentSchema[],
+    visitor: (row: ComponentQueryRow) => void,
+  ): void;
   _queryCount(components: readonly ComponentSchema[]): number;
   _entityRef(entityId: number): TEntity;
   _component?(record: ComponentRecord): QueryComponentInstance<FieldDefinitions, TAccess>;
@@ -219,11 +229,56 @@ class QueryResultImpl<
     return this.world._queryCount(this.components);
   }
 
+  #rowFromStorageRow(row: ComponentQueryRow): QueryRow<TComponents, TEntity, TAccess> {
+    const components = this.components;
+    const component = this.world._component;
+    const entity = this.world._entityRef(row.entityId);
+    if (components.length === 0) {
+      return [entity] as unknown as QueryRow<TComponents, TEntity, TAccess>;
+    }
+    if (components.length === 1) {
+      return [
+        entity,
+        component === undefined ? row.first!.instance : component(row.first!),
+      ] as unknown as QueryRow<TComponents, TEntity, TAccess>;
+    }
+    if (components.length === 2) {
+      return [
+        entity,
+        component === undefined ? row.first!.instance : component(row.first!),
+        component === undefined ? row.second!.instance : component(row.second!),
+      ] as unknown as QueryRow<TComponents, TEntity, TAccess>;
+    }
+    if (components.length === 3) {
+      return [
+        entity,
+        component === undefined ? row.first!.instance : component(row.first!),
+        component === undefined ? row.second!.instance : component(row.second!),
+        component === undefined ? row.third!.instance : component(row.third!),
+      ] as unknown as QueryRow<TComponents, TEntity, TAccess>;
+    }
+    if (components.length === 4) {
+      return [
+        entity,
+        component === undefined ? row.first!.instance : component(row.first!),
+        component === undefined ? row.second!.instance : component(row.second!),
+        component === undefined ? row.third!.instance : component(row.third!),
+        component === undefined ? row.fourth!.instance : component(row.fourth!),
+      ] as unknown as QueryRow<TComponents, TEntity, TAccess>;
+    }
+
+    const result: unknown[] = [entity];
+    const records = row.records ?? [];
+    for (const record of records) {
+      result.push(component === undefined ? record.instance : component(record));
+    }
+    return result as QueryRow<TComponents, TEntity, TAccess>;
+  }
+
   [Symbol.iterator](): Iterator<QueryRow<TComponents, TEntity, TAccess>> {
     const components = this.components;
     const iterator = this.world._queryRows(components)[Symbol.iterator]();
-    const world = this.world;
-    const component = world._component;
+    const toPublicRow = (row: ComponentQueryRow) => this.#rowFromStorageRow(row);
 
     return {
       next(): IteratorResult<QueryRow<TComponents, TEntity, TAccess>> {
@@ -232,63 +287,7 @@ class QueryResultImpl<
           return { done: true, value: undefined };
         }
 
-        const { entityId } = next.value;
-        const entity = world._entityRef(entityId);
-        if (components.length === 0) {
-          return {
-            done: false,
-            value: [entity] as unknown as QueryRow<TComponents, TEntity, TAccess>,
-          };
-        }
-        if (components.length === 1) {
-          return {
-            done: false,
-            value: [
-              entity,
-              component === undefined ? next.value.first!.instance : component(next.value.first!),
-            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
-          };
-        }
-        if (components.length === 2) {
-          return {
-            done: false,
-            value: [
-              entity,
-              component === undefined ? next.value.first!.instance : component(next.value.first!),
-              component === undefined ? next.value.second!.instance : component(next.value.second!),
-            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
-          };
-        }
-        if (components.length === 3) {
-          return {
-            done: false,
-            value: [
-              entity,
-              component === undefined ? next.value.first!.instance : component(next.value.first!),
-              component === undefined ? next.value.second!.instance : component(next.value.second!),
-              component === undefined ? next.value.third!.instance : component(next.value.third!),
-            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
-          };
-        }
-        if (components.length === 4) {
-          return {
-            done: false,
-            value: [
-              entity,
-              component === undefined ? next.value.first!.instance : component(next.value.first!),
-              component === undefined ? next.value.second!.instance : component(next.value.second!),
-              component === undefined ? next.value.third!.instance : component(next.value.third!),
-              component === undefined ? next.value.fourth!.instance : component(next.value.fourth!),
-            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
-          };
-        }
-
-        const row: unknown[] = [entity];
-        const records = next.value.records ?? [];
-        for (const record of records) {
-          row.push(component === undefined ? record.instance : component(record));
-        }
-        return { done: false, value: row as QueryRow<TComponents, TEntity, TAccess> };
+        return { done: false, value: toPublicRow(next.value) };
       },
     };
   }
@@ -301,10 +300,10 @@ class QueryResultImpl<
     }
     const result: TResult[] = [];
     let index = 0;
-    for (const row of this) {
-      result.push(fn(row, index));
+    this.world._forEachQueryRow(this.components, (row) => {
+      result.push(fn(this.#rowFromStorageRow(row), index));
       index += 1;
-    }
+    });
     return result;
   }
 
@@ -313,10 +312,10 @@ class QueryResultImpl<
       throw new Error("QueryResult.forEach() requires a function");
     }
     let index = 0;
-    for (const row of this) {
-      fn(row, index);
+    this.world._forEachQueryRow(this.components, (row) => {
+      fn(this.#rowFromStorageRow(row), index);
       index += 1;
-    }
+    });
   }
 
   toArray(): QueryRow<TComponents, TEntity, TAccess>[] {
@@ -867,6 +866,38 @@ class WorldCore implements QueryWorldAccess {
     return this.#storage.queryRows(this.#componentIds(components));
   }
 
+  _forEachQueryRow(
+    components: readonly ComponentSchema[],
+    visitor: (row: ComponentQueryRow) => void,
+  ): void {
+    this.#storage.forEachRow(
+      this.#componentIds(components),
+      (entityId, first, second, third, fourth, records) => {
+        if (records !== undefined) {
+          visitor({ entityId, records });
+          return;
+        }
+        if (fourth !== undefined) {
+          visitor({ entityId, first: first!, second: second!, third: third!, fourth });
+          return;
+        }
+        if (third !== undefined) {
+          visitor({ entityId, first: first!, second: second!, third });
+          return;
+        }
+        if (second !== undefined) {
+          visitor({ entityId, first: first!, second });
+          return;
+        }
+        if (first !== undefined) {
+          visitor({ entityId, first });
+          return;
+        }
+        visitor({ entityId });
+      },
+    );
+  }
+
   _queryCount(components: readonly ComponentSchema[]): number {
     return this.#storage.countRows(this.#componentIds(components));
   }
@@ -976,6 +1007,7 @@ class WorldCore implements QueryWorldAccess {
   #readonlyQueryAccess(): QueryWorldAccess<ReadonlyEntityRef, "readonly"> {
     return {
       _queryRows: (components) => this._queryRows(components),
+      _forEachQueryRow: (components, visitor) => this._forEachQueryRow(components, visitor),
       _queryCount: (components) => this._queryCount(components),
       _entityRef: (entityId) => this.#readonlyEntityRef(entityId),
       _component: (record) => this.#readonlyComponent(record.instance),
