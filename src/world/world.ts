@@ -1259,7 +1259,7 @@ function assertComponentSchema(
 function readonlyNetRef<T>(source: NetRef<T>): ReadonlyNetRef<T> {
   return Object.freeze({
     get value() {
-      return source.value;
+      return source.peek();
     },
     set value(_value: T) {
       throw new Error(
