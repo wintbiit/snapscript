@@ -61,6 +61,7 @@ Keep examples aligned with these user paths:
 - repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
 - helpers that only read replicated state should accept `ReplicatedStateReader`, so host/client rendering paths share one implementation without local casts
+- example setup helpers should return concrete values instead of optional objects that require non-null assertions in copied user code
 
 ## Benchmark Mapping
 

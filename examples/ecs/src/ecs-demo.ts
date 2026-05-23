@@ -90,8 +90,9 @@ export interface DemoSnapshot {
   readonly benchmark: string;
 }
 
-export interface EcsSeedOptions {
-  readonly includeDefaultActors?: boolean;
+export interface EcsExampleActors {
+  readonly player: EntityRef;
+  readonly npc: EntityRef;
 }
 
 export class BrowserClock implements Clock {
@@ -266,9 +267,9 @@ export class HostDemo {
       snapshotEncoding: "batched",
     });
 
-    const seeded = seedEcsExampleWorld(this.world, 0, { includeDefaultActors: true });
-    this.player = seeded.player!;
-    this.npc = seeded.npc!;
+    const actors = seedEcsExampleActors(this.world);
+    this.player = actors.player;
+    this.npc = actors.npc;
 
     this.world.system("movement", "update", (world) => {
       runEcsMovementSystem(world);
@@ -409,30 +410,24 @@ export class ClientDemo {
   }
 }
 
-export function seedEcsExampleWorld(
-  world: HostWorld,
-  extraNpcCount = 0,
-  options: EcsSeedOptions = {},
-): { readonly player?: EntityRef; readonly npc?: EntityRef } {
-  const includeDefaultActors = options.includeDefaultActors ?? false;
-  let player: EntityRef | undefined;
-  let npc: EntityRef | undefined;
+export function seedEcsExampleActors(world: HostWorld, extraNpcCount = 0): EcsExampleActors {
+  // Host constructs and owns all authoritative entities.
+  const player = world.spawn(Player, {
+    position: { x: -4, y: 0 },
+    health: { hp: 100 },
+  });
+  const npc = world.spawn();
+  world.add(npc, Player, {
+    position: { x: 5, y: 2 },
+    velocity: { x: -0.02, y: 0 },
+    health: { hp: 60 },
+  });
+  seedExtraEcsExampleActors(world, extraNpcCount);
+  return { player, npc };
+}
 
-  if (includeDefaultActors) {
-    // Host constructs and owns all authoritative entities.
-    player = world.spawn(Player, {
-      position: { x: -4, y: 0 },
-      health: { hp: 100 },
-    });
-    npc = world.spawn();
-    world.add(npc, Player, {
-      position: { x: 5, y: 2 },
-      velocity: { x: -0.02, y: 0 },
-      health: { hp: 60 },
-    });
-  }
-
-  for (let index = 0; index < extraNpcCount; index += 1) {
+export function seedExtraEcsExampleActors(world: HostWorld, count: number): void {
+  for (let index = 0; index < count; index += 1) {
     const entity = world.spawn();
     world.add(entity, Player, {
       position: {
@@ -448,8 +443,6 @@ export function seedEcsExampleWorld(
       },
     });
   }
-
-  return player === undefined || npc === undefined ? {} : { player, npc };
 }
 
 export function runEcsMovementSystem(world: HostWorld): number {
