@@ -135,6 +135,8 @@ function clock(): Clock {
 const benchProtocol = defineProtocol({
   components: { Position, Velocity, Health },
 });
+const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
+const TripleQuery = [Position, Velocity, Health] as const satisfies ComponentQuery;
 const ReadonlyRenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
 function buildWorld(entityCount: number) {
@@ -267,7 +269,7 @@ function sample<T>(
 
 function moveAll(world: HostWorld): number {
   let rows = 0;
-  world.each([Position, Velocity] as const, (_entity, pos, vel) => {
+  world.each(MovementQuery, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
     pos.y.value += vel.y.value;
     rows += 1;
@@ -277,7 +279,7 @@ function moveAll(world: HostWorld): number {
 
 function moveAndDampenAll(world: HostWorld): number {
   let rows = 0;
-  world.each([Position, Velocity] as const, (_entity, pos, vel) => {
+  world.each(MovementQuery, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
     pos.y.value += vel.y.value;
     vel.x.value *= 0.98;
@@ -289,11 +291,28 @@ function moveAndDampenAll(world: HostWorld): number {
 
 function touchTriple(world: HostWorld): number {
   let rows = 0;
-  world.each([Position, Velocity, Health] as const, (_entity, pos, vel, health) => {
+  world.each(TripleQuery, (_entity, pos, vel, health) => {
     pos.x.value += vel.x.value;
     rows += health.hp.value >= 0 ? 1 : 0;
   });
   return rows;
+}
+
+function repeatedPairEach(world: HostWorld, tuple: "inline" | "cached"): number {
+  let checksum = 0;
+  for (let pass = 0; pass < 1_000; pass += 1) {
+    if (tuple === "cached") {
+      world.each(MovementQuery, (_entity, pos, vel) => {
+        checksum += pos.x.value + vel.x.value;
+      });
+      continue;
+    }
+
+    world.each([Position, Velocity] as const, (_entity, pos, vel) => {
+      checksum += pos.x.value + vel.x.value;
+    });
+  }
+  return checksum === Number.POSITIVE_INFINITY ? 0 : checksum;
 }
 
 function countQuery(world: ReturnType<typeof createTestHostWorld>, mode: "single" | "pair" | "triple"): number {
@@ -1382,6 +1401,24 @@ describe("benchmark baselines", () => {
         name,
         entities: 50_000,
         rows: measured.value,
+        ms: measured.ms,
+        minMs: measured.minMs,
+        maxMs: measured.maxMs,
+        samples: measured.samples,
+        iterations: measured.iterations,
+      });
+    }
+
+    for (const [name, tuple] of [
+      ["inline tuple repeated pair each 10x1000", "inline"],
+      ["cached tuple repeated pair each 10x1000", "cached"],
+    ] as const) {
+      const world = buildWorld(10);
+      const measured = sample(() => repeatedPairEach(world, tuple));
+      rows.push({
+        name,
+        entities: 10,
+        rows: 10_000,
         ms: measured.ms,
         minMs: measured.minMs,
         maxMs: measured.maxMs,
