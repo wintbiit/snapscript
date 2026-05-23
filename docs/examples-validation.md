@@ -69,6 +69,12 @@ Performance experiments should be tied back to those same user paths:
 - `test/benchmark-examples.test.ts` is the example-derived gate. It imports the real
   `examples/ecs` protocol, components, and prefab definitions, then measures host movement,
   host-to-client snapshot sync, and client render queries through public world APIs.
+- The benchmark has two modes when run on the current branch: `default-compatible`, which can be
+  copied into a main-branch worktree for apples-to-apples comparison, and `batched-current`, which
+  mirrors the current ECS example's opt-in batched snapshot setting.
+- End-to-end rows are also split into `host tick send`, `client tick apply`, and client render rows.
+  The split uses Tinybench hooks so packet generation for client-apply measurements is outside the
+  timed section.
 - `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
 - `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
 - `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
@@ -79,5 +85,8 @@ Cross-branch example comparison:
 ```sh
 BENCH_TIME_MS=100 BENCH_WARMUP_TIME_MS=20 pnpm bench:branch:compare -- --main D:\src\snapscript-main-bench --test-file test/benchmark-examples.test.ts
 ```
+
+The compare script sets `SNAPSCRIPT_BRANCH_COMPARE=1`, so current-branch-only benchmark modes are
+skipped while comparing against main.
 
 When public APIs change, update the examples first, then run `pnpm test:examples`, `pnpm example:simple:build`, and `pnpm example:ecs:build`.

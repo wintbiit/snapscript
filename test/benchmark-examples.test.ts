@@ -22,6 +22,7 @@ import {
 interface ExampleBenchRow {
   readonly name: string;
   readonly entities: number;
+  readonly mode: string;
   readonly rows?: number;
   readonly bytes?: number;
   readonly medianMs: number;
@@ -41,6 +42,12 @@ const DEFAULT_BENCH_WARMUP_TIME_MS = Math.max(
   0,
   Number.parseInt(process.env.BENCH_WARMUP_TIME_MS ?? "5", 10),
 );
+const COMPARE_COMPAT_MODE = process.env.SNAPSCRIPT_BRANCH_COMPARE === "1";
+
+interface EcsBenchMode {
+  readonly label: string;
+  readonly snapshotEncoding?: "default" | "batched";
+}
 
 class ExampleBenchTransport implements ClientTransport, HostTransport {
   peer?: ExampleBenchTransport;
@@ -133,6 +140,10 @@ async function sample<T>(
   samples = DEFAULT_SAMPLES,
   iterations = 1,
   warmups = DEFAULT_WARMUPS,
+  hooks: {
+    readonly beforeEach?: () => void;
+    readonly afterEach?: () => void;
+  } = {},
 ): Promise<{
   readonly value: T;
   readonly medianMs: number;
@@ -152,9 +163,13 @@ async function sample<T>(
     warmupTime: warmups === 0 ? 0 : DEFAULT_BENCH_WARMUP_TIME_MS,
   });
 
-  bench.add("sample", () => {
-    value = fn();
-  });
+  bench.add(
+    "sample",
+    () => {
+      value = fn();
+    },
+    hooks,
+  );
 
   if (warmups > 0 || DEFAULT_BENCH_WARMUP_TIME_MS > 0) {
     await bench.warmup();
@@ -187,18 +202,22 @@ function median(values: readonly number[]): number {
     : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
-function createEcsBenchPair(extraEntities: number): {
+function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): {
   readonly host: HostWorld;
   readonly client: ClientWorld;
   readonly hostTransport: ExampleBenchTransport;
   readonly clientTransport: ExampleBenchTransport;
 } {
   const [hostTransport, clientTransport] = transportPair();
-  const host = createHostWorld({
+  const hostOptions = {
     protocol,
     transport: hostTransport,
     clock: new ExampleBenchClock(),
     visibility: "all",
+    ...(mode.snapshotEncoding === undefined ? {} : { snapshotEncoding: mode.snapshotEncoding }),
+  } as Parameters<typeof createHostWorld>[0];
+  const host = createHostWorld({
+    ...hostOptions,
   });
   const client = createClientWorld({
     protocol,
@@ -280,12 +299,23 @@ function runNetworkedFrame(host: HostWorld, client: ClientWorld): number {
   return countExampleRenderViews(client);
 }
 
+function runHostTickSend(host: HostWorld, hostTransport: ExampleBenchTransport): number {
+  hostTransport.resetCounters();
+  host.tick();
+  return hostTransport.sent;
+}
+
+function runClientTickApply(client: ClientWorld): void {
+  client.tick();
+}
+
 function report(rows: readonly ExampleBenchRow[]): void {
   console.info(`\nSnapScript examples benchmark (${new Date().toISOString()})`);
   for (const row of rows) {
     console.info(`[example-bench-summary] ${JSON.stringify(row)}`);
     const details = [
       `entities=${row.entities}`,
+      `mode=${row.mode}`,
       row.rows === undefined ? undefined : `rows=${row.rows}`,
       row.bytes === undefined ? undefined : `bytes=${row.bytes}`,
       `medianMs=${formatMs(row.medianMs)}`,
@@ -307,55 +337,119 @@ function formatMs(value: number): string {
 describe("example-derived benchmark", () => {
   it("measures ECS example host, sync, and render paths", async () => {
     const rows: ExampleBenchRow[] = [];
+    const modes: EcsBenchMode[] = [
+      { label: "default-compatible" },
+      ...(COMPARE_COMPAT_MODE
+        ? []
+        : [{ label: "batched-current", snapshotEncoding: "batched" as const }]),
+    ];
 
-    for (const extraEntities of [1_000, 10_000]) {
-      const totalEntities = extraEntities + 2;
-      const { host, client, hostTransport } = createEcsBenchPair(extraEntities);
+    for (const mode of modes) {
+      for (const extraEntities of [1_000, 10_000]) {
+        const totalEntities = extraEntities + 2;
+        const { host, client, hostTransport } = createEcsBenchPair(extraEntities, mode);
 
-      const movement = await sample(() => runExampleMovement(host));
-      rows.push({
-        name: "ecs example movement system",
-        entities: totalEntities,
-        rows: movement.value,
-        medianMs: movement.medianMs,
-        minMs: movement.minMs,
-        maxMs: movement.maxMs,
-        samples: movement.samples,
-        iterations: movement.iterations,
-      });
+        const movement = await sample(() => runExampleMovement(host));
+        rows.push({
+          name: "ecs example movement system",
+          entities: totalEntities,
+          mode: mode.label,
+          rows: movement.value,
+          medianMs: movement.medianMs,
+          minMs: movement.minMs,
+          maxMs: movement.maxMs,
+          samples: movement.samples,
+          iterations: movement.iterations,
+        });
 
-      const render = await sample(() => countExampleRenderViews(client));
-      rows.push({
-        name: "ecs example client render views",
-        entities: totalEntities,
-        rows: render.value,
-        medianMs: render.medianMs,
-        minMs: render.minMs,
-        maxMs: render.maxMs,
-        samples: render.samples,
-        iterations: render.iterations,
-      });
+        const render = await sample(() => countExampleRenderViews(client));
+        rows.push({
+          name: "ecs example client render views",
+          entities: totalEntities,
+          mode: mode.label,
+          rows: render.value,
+          medianMs: render.medianMs,
+          minMs: render.minMs,
+          maxMs: render.maxMs,
+          samples: render.samples,
+          iterations: render.iterations,
+        });
 
-      const networked = await sample(() => {
-        hostTransport.resetCounters();
-        const renderedRows = runNetworkedFrame(host, client);
-        return { renderedRows, bytes: hostTransport.sent };
-      });
-      rows.push({
-        name: "ecs example host tick sync client render",
-        entities: totalEntities,
-        rows: networked.value.renderedRows,
-        bytes: networked.value.bytes,
-        medianMs: networked.medianMs,
-        minMs: networked.minMs,
-        maxMs: networked.maxMs,
-        samples: networked.samples,
-        iterations: networked.iterations,
-      });
+        const hostSend = await sample(
+          () => runHostTickSend(host, hostTransport),
+          DEFAULT_SAMPLES,
+          1,
+          DEFAULT_WARMUPS,
+          {
+            afterEach: () => {
+              client.tick();
+            },
+          },
+        );
+        rows.push({
+          name: "ecs example host tick send",
+          entities: totalEntities,
+          mode: mode.label,
+          rows: totalEntities,
+          bytes: hostSend.value,
+          medianMs: hostSend.medianMs,
+          minMs: hostSend.minMs,
+          maxMs: hostSend.maxMs,
+          samples: hostSend.samples,
+          iterations: hostSend.iterations,
+        });
+
+        const clientApply = await sample(
+          () => {
+            runClientTickApply(client);
+            return hostTransport.sent;
+          },
+          DEFAULT_SAMPLES,
+          1,
+          DEFAULT_WARMUPS,
+          {
+            beforeEach: () => {
+              client.tick();
+              hostTransport.resetCounters();
+              host.tick();
+            },
+          },
+        );
+        rows.push({
+          name: "ecs example client tick apply",
+          entities: totalEntities,
+          mode: mode.label,
+          rows: totalEntities,
+          bytes: clientApply.value,
+          medianMs: clientApply.medianMs,
+          minMs: clientApply.minMs,
+          maxMs: clientApply.maxMs,
+          samples: clientApply.samples,
+          iterations: clientApply.iterations,
+        });
+
+        const networked = await sample(() => {
+          hostTransport.resetCounters();
+          const renderedRows = runNetworkedFrame(host, client);
+          return { renderedRows, bytes: hostTransport.sent };
+        });
+        rows.push({
+          name: "ecs example host tick sync client render",
+          entities: totalEntities,
+          mode: mode.label,
+          rows: networked.value.renderedRows,
+          bytes: networked.value.bytes,
+          medianMs: networked.medianMs,
+          minMs: networked.minMs,
+          maxMs: networked.maxMs,
+          samples: networked.samples,
+          iterations: networked.iterations,
+        });
+      }
     }
 
     report(rows);
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(modes.length * 10);
     expect(
       rows.some((row) => row.name === "ecs example movement system" && row.rows === row.entities),
     ).toBe(true);
