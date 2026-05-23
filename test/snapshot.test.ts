@@ -10,6 +10,7 @@ import { createRegistry } from "../src/registry/index";
 import {
   applySnapshot,
   encodeDirty,
+  encodeDirtyBatched,
   encodeFullSnapshot,
   SnapshotOp,
 } from "../src/sync/index";
@@ -90,6 +91,101 @@ describe("snapshot sync", () => {
 
     expect(b.get(player.id, PlayerState)?.hp.value).toBe(50);
     expect(b.get(player.id, PlayerState)?.dead.value).toBe(false);
+  });
+
+  it("keeps update ops before removals and destroys in default snapshots", () => {
+    const Player = defineEntity("DefaultSnapshotOrderPlayer", {
+      hp: u16(100),
+    });
+    const PlayerState = Player.component;
+    const protocol = testProtocol(Player);
+    const world = createTestHostWorld(protocol);
+    const first = world.spawn(Player);
+    const second = world.spawn(Player);
+
+    encodeDirty(world, 1);
+    world.get(first, PlayerState)!.hp.value = 50;
+    world.destroy(second);
+    const reader = new BitReader(encodeDirty(world, 2));
+
+    expect(reader.readU8()).toBe(1);
+    expect(reader.readU32()).toBe(2);
+    expect(reader.readVarUint()).toBe(2);
+    expect(reader.readVarUint()).toBe(first.id);
+    expect(reader.readVarUint()).toBe(PlayerState.schemaId);
+    expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
+    expect(reader.readVarUint()).toBe(PlayerState.fields.hp.dirtyBit);
+    expect(reader.readU16()).toBe(50);
+    expect(reader.readVarUint()).toBe(second.id);
+    expect(reader.readVarUint()).toBe(0);
+    expect(reader.readU8()).toBe(SnapshotOp.DestroyEntity);
+    expect(reader.remaining()).toBe(0);
+  });
+
+  it("encodes homogeneous dirty updates as a batched snapshot candidate", () => {
+    const Player = defineEntity("BatchedUpdatePlayer", {
+      hp: u16(100),
+    });
+    const PlayerState = Player.component;
+    const registry = createRegistry().registerComponent(PlayerState);
+    const protocol = testProtocol(Player);
+    const a = createTestHostWorld(protocol);
+    const b = createTestClientWorld(protocol);
+    const first = a.spawn(Player);
+    const second = a.spawn(Player);
+
+    applySnapshot(b, encodeDirty(a, 1), registry);
+    a.get(first, PlayerState)!.hp.value = 50;
+    a.get(second, PlayerState)!.hp.value = 75;
+    const bytes = encodeDirtyBatched(a, 2);
+    const reader = new BitReader(bytes);
+
+    expect(reader.readU8()).toBe(1);
+    expect(reader.readU32()).toBe(2);
+    expect(reader.readVarUint()).toBe(1);
+    expect(reader.readVarUint()).toBe(0);
+    expect(reader.readVarUint()).toBe(PlayerState.schemaId);
+    expect(reader.readU8()).toBe(SnapshotOp.BatchUpdateComponent);
+    expect(reader.readVarUint()).toBe(PlayerState.fields.hp.dirtyBit);
+    expect(reader.readVarUint()).toBe(2);
+
+    applySnapshot(b, bytes, registry);
+
+    expect(b.get(first.id, PlayerState)?.hp.value).toBe(50);
+    expect(b.get(second.id, PlayerState)?.hp.value).toBe(75);
+    expect(encodeDirty(a, 3)).toEqual(new Uint8Array([1, 3, 0, 0, 0, 0]));
+  });
+
+  it("keeps uncommon dirty masks as normal update ops in batched encoding", () => {
+    const Player = defineEntity("BatchedFallbackPlayer", {
+      hp: u16(100),
+      armor: u16(0),
+    });
+    const PlayerState = Player.component;
+    const protocol = testProtocol(Player);
+    const world = createTestHostWorld(protocol);
+    const first = world.spawn(Player);
+    const second = world.spawn(Player);
+
+    encodeDirty(world, 1);
+    world.get(first, PlayerState)!.hp.value = 50;
+    world.get(second, PlayerState)!.armor.value = 25;
+    const reader = new BitReader(encodeDirtyBatched(world, 2));
+
+    expect(reader.readU8()).toBe(1);
+    expect(reader.readU32()).toBe(2);
+    expect(reader.readVarUint()).toBe(2);
+    expect(reader.readVarUint()).toBe(first.id);
+    expect(reader.readVarUint()).toBe(PlayerState.schemaId);
+    expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
+    expect(reader.readVarUint()).toBe(PlayerState.fields.hp.dirtyBit);
+    expect(reader.readU16()).toBe(50);
+    expect(reader.readVarUint()).toBe(second.id);
+    expect(reader.readVarUint()).toBe(PlayerState.schemaId);
+    expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
+    expect(reader.readVarUint()).toBe(PlayerState.fields.armor.dirtyBit);
+    expect(reader.readU16()).toBe(25);
+    expect(reader.remaining()).toBe(0);
   });
 
   it("encodes a full snapshot without consuming dirty state", () => {

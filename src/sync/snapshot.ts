@@ -16,6 +16,7 @@ export enum SnapshotOp {
   UpdateComponent = 3,
   RemoveComponent = 4,
   DestroyEntity = 5,
+  BatchUpdateComponent = 6,
 }
 
 export interface SnapshotWriteOps {
@@ -29,6 +30,12 @@ export interface SnapshotWriteOps {
   readonly removed?: readonly { readonly entityId: number; readonly componentId: number }[];
   readonly destroyed?: readonly number[];
 }
+
+type SnapshotUpdateOp = {
+  readonly entityId: number;
+  readonly componentId: number;
+  readonly fieldMask: number;
+};
 
 export function encodeFullSnapshot(world: SnapshotWorld, tick: number): Uint8Array {
   const internals = worldInternals(world);
@@ -49,11 +56,35 @@ export function encodeDirty(world: SnapshotWorld, tick: number): Uint8Array {
   return bytes;
 }
 
+export function encodeDirtyBatched(world: SnapshotWorld, tick: number): Uint8Array {
+  const internals = worldInternals(world);
+  const dirty = internals.getDirtySnapshot();
+  const bytes = encodeSnapshotOpsBatched(world, tick, dirty);
+  internals.clearWrittenDirty(dirty);
+  return bytes;
+}
+
 export function encodeSnapshotOps(world: SnapshotWorld, tick: number, ops: SnapshotWriteOps): Uint8Array {
   // Snapshot encoding is a hot path; reuse BitWriter instances while still returning immutable packet bytes.
   const writer = acquireWriter();
   try {
     writeSnapshotOps(writer, world, tick, ops);
+    return writer.finish();
+  } finally {
+    releaseWriter(writer);
+  }
+}
+
+export function encodeSnapshotOpsBatched(
+  world: SnapshotWorld,
+  tick: number,
+  ops: SnapshotWriteOps,
+): Uint8Array {
+  // Candidate fast path for homogeneous dirty updates. The default encoder stays unchanged so
+  // wire-format compatibility can be gated by runtime protocol capability later.
+  const writer = acquireWriter();
+  try {
+    writeSnapshotOpsBatched(writer, world, tick, ops);
     return writer.finish();
   } finally {
     releaseWriter(writer);
@@ -73,12 +104,69 @@ function writeSnapshotOps(
   const removed = ops.removed ?? [];
   const destroyed = ops.destroyed ?? [];
 
-  writer.writeU8(MessageType.Snapshot);
-  writer.writeU32(tick);
-  writer.writeVarUint(
+  writeSnapshotHeader(
+    writer,
+    tick,
     created.length + added.length + updated.length + removed.length + destroyed.length,
   );
 
+  writeCreateAndAddOps(writer, internals, created, added);
+
+  for (const { entityId, componentId, fieldMask } of updated) {
+    writeUpdateOp(writer, internals, entityId, componentId, fieldMask);
+  }
+
+  writeRemoveAndDestroyOps(writer, removed, destroyed);
+}
+
+function writeSnapshotOpsBatched(
+  writer: BitWriter,
+  world: SnapshotWorld,
+  tick: number,
+  ops: SnapshotWriteOps,
+): void {
+  const internals = worldInternals(world);
+  const created = ops.created ?? [];
+  const added = ops.added ?? [];
+  const updated = ops.updated ?? [];
+  const removed = ops.removed ?? [];
+  const destroyed = ops.destroyed ?? [];
+  const grouped = groupBatchableUpdates(updated);
+  const singleUpdates = grouped.singleUpdates;
+
+  writeSnapshotHeader(
+    writer,
+    tick,
+    created.length + added.length + removed.length + destroyed.length +
+      singleUpdates.length +
+      grouped.batchGroups.length,
+  );
+
+  writeCreateAndAddOps(writer, internals, created, added);
+
+  for (const { entityId, componentId, fieldMask } of singleUpdates) {
+    writeUpdateOp(writer, internals, entityId, componentId, fieldMask);
+  }
+
+  for (const group of grouped.batchGroups) {
+    writeBatchUpdateOp(writer, internals, group);
+  }
+
+  writeRemoveAndDestroyOps(writer, removed, destroyed);
+}
+
+function writeSnapshotHeader(writer: BitWriter, tick: number, opCount: number): void {
+  writer.writeU8(MessageType.Snapshot);
+  writer.writeU32(tick);
+  writer.writeVarUint(opCount);
+}
+
+function writeCreateAndAddOps(
+  writer: BitWriter,
+  internals: ReturnType<typeof worldInternals>,
+  created: readonly number[],
+  added: readonly { readonly entityId: number; readonly componentId: number }[],
+): void {
   for (const entityId of created) {
     writer.writeVarUint(entityId);
     writer.writeVarUint(0);
@@ -96,20 +184,13 @@ function writeSnapshotOps(
     writer.writeU8(SnapshotOp.AddComponent);
     codecForSchema(record.schema).writeFull(writer, record.instance);
   }
+}
 
-  for (const { entityId, componentId, fieldMask } of updated) {
-    const record = internals.getRecord(entityId, componentId);
-    if (record === undefined || fieldMask === 0) {
-      throw new Error(`Cannot encode update for missing component ${componentId} on entity ${entityId}`);
-    }
-
-    writer.writeVarUint(entityId);
-    writer.writeVarUint(componentId);
-    writer.writeU8(SnapshotOp.UpdateComponent);
-    writer.writeVarUint(fieldMask);
-    codecForSchema(record.schema).writeDelta(writer, record.instance, fieldMask);
-  }
-
+function writeRemoveAndDestroyOps(
+  writer: BitWriter,
+  removed: readonly { readonly entityId: number; readonly componentId: number }[],
+  destroyed: readonly number[],
+): void {
   for (const { entityId, componentId } of removed) {
     writer.writeVarUint(entityId);
     writer.writeVarUint(componentId);
@@ -120,6 +201,84 @@ function writeSnapshotOps(
     writer.writeVarUint(entityId);
     writer.writeVarUint(0);
     writer.writeU8(SnapshotOp.DestroyEntity);
+  }
+}
+
+function writeUpdateOp(
+  writer: BitWriter,
+  internals: ReturnType<typeof worldInternals>,
+  entityId: number,
+  componentId: number,
+  fieldMask: number,
+): void {
+  const record = internals.getRecord(entityId, componentId);
+  if (record === undefined || fieldMask === 0) {
+    throw new Error(`Cannot encode update for missing component ${componentId} on entity ${entityId}`);
+  }
+
+  writer.writeVarUint(entityId);
+  writer.writeVarUint(componentId);
+  writer.writeU8(SnapshotOp.UpdateComponent);
+  writer.writeVarUint(fieldMask);
+  codecForSchema(record.schema).writeDelta(writer, record.instance, fieldMask);
+}
+
+interface BatchUpdateGroup {
+  readonly componentId: number;
+  readonly fieldMask: number;
+  readonly updates: readonly SnapshotUpdateOp[];
+}
+
+function groupBatchableUpdates(updated: readonly SnapshotUpdateOp[]): {
+  readonly singleUpdates: readonly SnapshotUpdateOp[];
+  readonly batchGroups: readonly BatchUpdateGroup[];
+} {
+  const bySignature = new Map<string, SnapshotUpdateOp[]>();
+  for (const update of updated) {
+    const signature = `${update.componentId}:${update.fieldMask}`;
+    let group = bySignature.get(signature);
+    if (group === undefined) {
+      group = [];
+      bySignature.set(signature, group);
+    }
+    group.push(update);
+  }
+
+  const singleUpdates: SnapshotUpdateOp[] = [];
+  const batchGroups: BatchUpdateGroup[] = [];
+  for (const group of bySignature.values()) {
+    if (group.length < 2) {
+      singleUpdates.push(...group);
+      continue;
+    }
+    batchGroups.push({
+      componentId: group[0]!.componentId,
+      fieldMask: group[0]!.fieldMask,
+      updates: group,
+    });
+  }
+
+  return { singleUpdates, batchGroups };
+}
+
+function writeBatchUpdateOp(
+  writer: BitWriter,
+  internals: ReturnType<typeof worldInternals>,
+  group: BatchUpdateGroup,
+): void {
+  writer.writeVarUint(0);
+  writer.writeVarUint(group.componentId);
+  writer.writeU8(SnapshotOp.BatchUpdateComponent);
+  writer.writeVarUint(group.fieldMask);
+  writer.writeVarUint(group.updates.length);
+
+  for (const { entityId, componentId, fieldMask } of group.updates) {
+    const record = internals.getRecord(entityId, componentId);
+    if (record === undefined || fieldMask === 0) {
+      throw new Error(`Cannot encode update for missing component ${componentId} on entity ${entityId}`);
+    }
+    writer.writeVarUint(entityId);
+    codecForSchema(record.schema).writeDelta(writer, record.instance, fieldMask);
   }
 }
 
@@ -209,6 +368,26 @@ export function applySnapshot(world: SnapshotWorld, bytes: Uint8Array, registry:
       }
       const fieldMask = reader.readVarUint();
       codecForSchema(schema).readDelta(reader, record.instance, fieldMask);
+      continue;
+    }
+
+    if (op === SnapshotOp.BatchUpdateComponent) {
+      if (entityId !== 0) {
+        throw new Error(`Batch update op must use entityId 0, got ${entityId}`);
+      }
+      const fieldMask = reader.readVarUint();
+      const count = reader.readVarUint();
+      const codec = codecForSchema(schema);
+      for (let batchIndex = 0; batchIndex < count; batchIndex += 1) {
+        const batchedEntityId = reader.readVarUint();
+        const record = internals.getRecord(batchedEntityId, componentId);
+        if (record === undefined) {
+          throw new Error(
+            `Cannot apply batch update for unknown entity ${batchedEntityId} and component ${componentId}`,
+          );
+        }
+        codec.readDelta(reader, record.instance, fieldMask);
+      }
       continue;
     }
 
