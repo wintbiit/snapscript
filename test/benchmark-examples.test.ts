@@ -341,7 +341,7 @@ describe("example-derived benchmark", () => {
       { label: "default-compatible" },
       ...(COMPARE_COMPAT_MODE
         ? []
-        : [{ label: "batched-current", snapshotEncoding: "batched" as const }]),
+        : [{ label: "batched-opt-in", snapshotEncoding: "batched" as const }]),
     ];
 
     for (const mode of modes) {

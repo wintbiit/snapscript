@@ -22,7 +22,6 @@ The smoke test imports the example modules and runs host/client flows with in-me
 - `examples/ecs`
   - host creates player and NPC prefabs
   - host uses explicit all-visible interest policy
-  - host opts into negotiated batched dirty snapshots
   - client receives replicated query rows
   - client sends movement and damage commands
   - host system and command handlers update components
@@ -55,7 +54,7 @@ Keep examples aligned with these user paths:
 - transport adapters pass bytes and channel names without wrapping SnapScript packets in another framework protocol
 - all-visible examples should use `visibility: "all"` instead of dummy peer-specific overrides
 - examples exercise command/event/snapshot behavior, not only render UI
-- the ECS example keeps the optimized `snapshotEncoding: "batched"` path exercised through public APIs
+- batched snapshots stay opt-in until the example-derived benchmark shows a CPU win, not only a byte-size win
 - repeated render/read loops should use `each()` rather than `query().map()` when they do not need to keep query tuples
 - `query().map()` and `query().forEach()` are acceptable for ordinary readable code, but hot render/system paths should still graduate to `each()`
 - repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
@@ -71,14 +70,14 @@ Performance experiments should be tied back to those same user paths:
   `examples/ecs` protocol, components, and prefab definitions, then measures host movement,
   host-to-client snapshot sync, and client render queries through public world APIs.
 - The benchmark has two modes when run on the current branch: `default-compatible`, which can be
-  copied into a main-branch worktree for apples-to-apples comparison, and `batched-current`, which
-  mirrors the current ECS example's opt-in batched snapshot setting.
+  copied into a main-branch worktree for apples-to-apples comparison, and `batched-opt-in`, which
+  tracks the negotiated batched snapshot path without making it the ECS example default.
 - End-to-end rows are also split into `host tick send`, `client tick apply`, and client render rows.
   The split uses Tinybench hooks so packet generation for client-apply measurements is outside the
   timed section.
 - `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
 - `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
-- `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
+- the `batched-opt-in` benchmark mode maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
 - bitECS-inspired SOA prototypes are upper-bound comparisons only: they mutate entity-id indexed columns directly, while the public example must keep `world.each()`, readonly clients, dirty snapshots, and schema codecs.
 
 Cross-branch example comparison:

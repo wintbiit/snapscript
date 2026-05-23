@@ -263,8 +263,6 @@ export class HostDemo {
       clock: this.clock,
       // Keep the example's interest model explicit: every entity is visible to every peer.
       visibility: "all",
-      // Opt into the negotiated batched snapshot path used by query-heavy ECS examples.
-      snapshotEncoding: "batched",
     });
 
     const actors = seedEcsExampleActors(this.world);

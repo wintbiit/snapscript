@@ -460,11 +460,11 @@ gate for user-visible performance because they measure the same world API shape 
 the examples. Microbenchmarks are still useful for isolating storage and codec costs, but they should
 not be treated as proof of end-to-end framework speed by themselves.
 
-The example benchmark includes a main-compatible default mode and a current-branch mode for the ECS
-example's opt-in batched snapshots. Current batched snapshots reduce bytes, but the 10k ECS example
-still shows higher CPU cost than the default packet shape, so batched encoding remains an optimization
-target rather than a proven default. The benchmark now splits the frame into host send, client apply,
-and render phases so regressions point to a concrete runtime path.
+The example benchmark includes a main-compatible default mode and a separate batched opt-in mode.
+Batched snapshots reduce bytes, but the 10k ECS example still shows higher CPU cost than the default
+packet shape, so the ECS example uses the default packet shape until batched host encoding is faster.
+The benchmark splits the frame into host send, client apply, and render phases so regressions point
+to a concrete runtime path.
 
 ## Internal Architecture Notes
 
