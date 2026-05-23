@@ -74,7 +74,8 @@ Performance experiments should be tied back to those same user paths:
   tracks the negotiated batched snapshot path without making it the ECS example default.
 - End-to-end rows are also split into `host tick send`, `client tick apply`, and client render rows.
   The split uses Tinybench hooks so packet generation for client-apply measurements is outside the
-  timed section.
+  timed section. Stateful sync rows create a fresh example scenario for each measured sample, so
+  dirty masks, clocks, and transport queues do not bleed across iterations.
 - `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
 - `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
 - the `batched-opt-in` benchmark mode maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
