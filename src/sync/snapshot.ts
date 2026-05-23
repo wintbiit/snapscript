@@ -8,6 +8,7 @@ import { MessageType } from "./message";
 
 type SnapshotWorld = HostWorld | ClientWorld;
 const MAX_POOLED_WRITERS = 16;
+const MAX_LINEAR_BATCH_GROUPS = 16;
 const writerPool: BitWriter[] = [];
 
 export enum SnapshotOp {
@@ -229,36 +230,96 @@ interface BatchUpdateGroup {
   readonly updates: readonly SnapshotUpdateOp[];
 }
 
+interface BatchUpdateBuilder {
+  readonly componentId: number;
+  readonly fieldMask: number;
+  readonly updates: SnapshotUpdateOp[];
+}
+
 function groupBatchableUpdates(updated: readonly SnapshotUpdateOp[]): {
   readonly singleUpdates: readonly SnapshotUpdateOp[];
   readonly batchGroups: readonly BatchUpdateGroup[];
 } {
-  const bySignature = new Map<string, SnapshotUpdateOp[]>();
+  if (updated.length < 2) {
+    return { singleUpdates: updated, batchGroups: [] };
+  }
+
+  // Most frames touch only a few component/mask groups; avoid Map setup until grouping is wide.
+  const groups: BatchUpdateBuilder[] = [];
+  let groupsByComponent: Map<number, Map<number, BatchUpdateBuilder>> | undefined;
   for (const update of updated) {
-    const signature = `${update.componentId}:${update.fieldMask}`;
-    let group = bySignature.get(signature);
+    let group =
+      groupsByComponent === undefined
+        ? findBatchGroup(groups, update)
+        : getIndexedBatchGroup(groupsByComponent, update);
     if (group === undefined) {
-      group = [];
-      bySignature.set(signature, group);
+      group = {
+        componentId: update.componentId,
+        fieldMask: update.fieldMask,
+        updates: [],
+      };
+      groups.push(group);
+      if (groupsByComponent !== undefined) {
+        indexBatchGroup(groupsByComponent, group);
+      } else if (groups.length > MAX_LINEAR_BATCH_GROUPS) {
+        groupsByComponent = indexBatchGroups(groups);
+      }
     }
-    group.push(update);
+    group.updates.push(update);
   }
 
   const singleUpdates: SnapshotUpdateOp[] = [];
   const batchGroups: BatchUpdateGroup[] = [];
-  for (const group of bySignature.values()) {
-    if (group.length < 2) {
-      singleUpdates.push(...group);
+  for (const group of groups) {
+    if (group.updates.length < 2) {
+      singleUpdates.push(group.updates[0]!);
       continue;
     }
-    batchGroups.push({
-      componentId: group[0]!.componentId,
-      fieldMask: group[0]!.fieldMask,
-      updates: group,
-    });
+    batchGroups.push(group);
   }
 
   return { singleUpdates, batchGroups };
+}
+
+function findBatchGroup(
+  groups: readonly BatchUpdateBuilder[],
+  update: SnapshotUpdateOp,
+): BatchUpdateBuilder | undefined {
+  for (const group of groups) {
+    if (group.componentId === update.componentId && group.fieldMask === update.fieldMask) {
+      return group;
+    }
+  }
+  return undefined;
+}
+
+function indexBatchGroups(
+  groups: readonly BatchUpdateBuilder[],
+): Map<number, Map<number, BatchUpdateBuilder>> {
+  const groupsByComponent = new Map<number, Map<number, BatchUpdateBuilder>>();
+  for (const group of groups) {
+    indexBatchGroup(groupsByComponent, group);
+  }
+  return groupsByComponent;
+}
+
+function indexBatchGroup(
+  groupsByComponent: Map<number, Map<number, BatchUpdateBuilder>>,
+  group: BatchUpdateBuilder,
+): void {
+  let groupsByMask = groupsByComponent.get(group.componentId);
+  if (groupsByMask === undefined) {
+    groupsByMask = new Map<number, BatchUpdateBuilder>();
+    groupsByComponent.set(group.componentId, groupsByMask);
+  }
+  groupsByMask.set(group.fieldMask, group);
+}
+
+function getIndexedBatchGroup(
+  groupsByComponent: Map<number, Map<number, BatchUpdateBuilder>>,
+  update: SnapshotUpdateOp,
+): BatchUpdateBuilder | undefined {
+  return groupsByComponent.get(update.componentId)?.get(update.fieldMask);
 }
 
 function writeBatchUpdateOp(
