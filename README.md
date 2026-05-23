@@ -385,7 +385,15 @@ Run benchmarks with:
 pnpm bench
 ```
 
-The benchmark reports median/min/max wall-clock time across 9 samples. The current benchmark covers:
+Timing benchmarks use `tinybench` with `process.hrtime.bigint()` and a minimum of 9 measured
+iterations per scenario. Cross-branch comparisons can run the same compatible benchmark against a
+main-branch worktree:
+
+```sh
+pnpm bench:branch:compare -- --main D:\src\snapscript-main-bench
+```
+
+The current benchmark covers:
 
 - query and `each()` loops
 - dirty snapshot encode
