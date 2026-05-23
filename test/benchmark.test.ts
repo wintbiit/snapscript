@@ -9,6 +9,7 @@ import {
   type ClientWorld,
   type ClientTransport,
   type Clock,
+  type ComponentQuery,
   type ComponentSchema,
   type HostWorld,
   type HostTransport,
@@ -134,6 +135,7 @@ function clock(): Clock {
 const benchProtocol = defineProtocol({
   components: { Position, Velocity, Health },
 });
+const ReadonlyRenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
 function buildWorld(entityCount: number) {
   const world = createTestHostWorld(benchProtocol);
@@ -344,7 +346,7 @@ function renderReadonlyViewsEach(world: ClientWorld): number {
 function renderReadonlyRequiredPairEach(world: ClientWorld): number {
   let rows = 0;
   let checksum = 0;
-  world.each([Position, Health] as const, (_entity, pos, health) => {
+  world.each(ReadonlyRenderQuery, (_entity, pos, health) => {
     checksum += pos.x.value + pos.y.value + health.hp.value;
     rows += 1;
   });

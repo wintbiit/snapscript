@@ -393,6 +393,7 @@ class WorldCore implements QueryWorldAccess {
     ComponentInstance<FieldDefinitions>,
     ReadonlyComponentInstance<FieldDefinitions>
   >();
+  readonly #componentIdCache = new WeakMap<readonly ComponentSchema[], readonly number[]>();
   readonly #protocol: ProtocolDefinition;
   readonly #protocolPrefabs = new WeakSet<PrefabDefinition>();
   readonly #knownProtocolComponents = new WeakSet<ComponentSchema>();
@@ -701,7 +702,7 @@ class WorldCore implements QueryWorldAccess {
       entity: EntityRef,
       ...components: ComponentInstance<FieldDefinitions>[]
     ) => void;
-    const componentIds = components.map((component) => component.schemaId);
+    const componentIds = this.#componentIds(components);
     const arity = componentIds.length;
     if (arity === 1) {
       this.#storage.forEachRow(componentIds, (entityId, first) => {
@@ -752,7 +753,7 @@ class WorldCore implements QueryWorldAccess {
       entity: ReadonlyEntityRef,
       ...components: ReadonlyComponentInstance<FieldDefinitions>[]
     ) => void;
-    const componentIds = components.map((component) => component.schemaId);
+    const componentIds = this.#componentIds(components);
     const arity = componentIds.length;
     if (arity === 1) {
       this.#storage.forEachRow(componentIds, (entityId, first) => {
@@ -863,11 +864,11 @@ class WorldCore implements QueryWorldAccess {
   }
 
   _queryRows(components: readonly ComponentSchema[]) {
-    return this.#storage.queryRows(components.map((component) => component.schemaId));
+    return this.#storage.queryRows(this.#componentIds(components));
   }
 
   _queryCount(components: readonly ComponentSchema[]): number {
-    return this.#storage.countRows(components.map((component) => component.schemaId));
+    return this.#storage.countRows(this.#componentIds(components));
   }
 
   _getDirtySnapshot() {
@@ -979,6 +980,17 @@ class WorldCore implements QueryWorldAccess {
       _entityRef: (entityId) => this.#readonlyEntityRef(entityId),
       _component: (record) => this.#readonlyComponent(record.instance),
     };
+  }
+
+  #componentIds(components: readonly ComponentSchema[]): readonly number[] {
+    const cached = this.#componentIdCache.get(components);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const componentIds = components.map((component) => component.schemaId);
+    this.#componentIdCache.set(components, componentIds);
+    return componentIds;
   }
 
   #readonlyComponent<TFields extends FieldDefinitions>(

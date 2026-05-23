@@ -46,6 +46,7 @@ export const Player = defineEntity("EcsExamplePlayer", {
 
 // Reusable query tuples should keep literal tuple inference for typed each/query rows.
 const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
+const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
 export const MoveCommand = defineCommand("EcsExampleMove", {
   dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
@@ -424,7 +425,7 @@ function toViews(world: ClientWorld): EntityView[];
 function toViews(world: HostWorld | ClientWorld): EntityView[] {
   const readable = world as unknown as {
     each(
-      components: readonly [typeof Position, typeof Health],
+      components: typeof RenderQuery,
       fn: (
         entity: ReadonlyEntityRef,
         position: ReadonlyComponentInstanceOf<typeof Position>,
@@ -433,7 +434,7 @@ function toViews(world: HostWorld | ClientWorld): EntityView[] {
     ): void;
   };
   const views: EntityView[] = [];
-  readable.each([Position, Health] as const, (entity, pos, health) => {
+  readable.each(RenderQuery, (entity, pos, health) => {
     // The example renders Player rows, so read required render components in one typed pass.
     views.push({
       id: entity.id,

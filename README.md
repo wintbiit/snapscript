@@ -221,7 +221,7 @@ Use `spawn()` to create entities. `add()` requires an existing entity; it does n
 
 Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. Use `each()` in hot systems and repeated render/read loops because it avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
 
-Reusable query tuples should preserve tuple inference:
+Reusable query tuples should preserve tuple inference. Reusing the same tuple object also lets the runtime cache component ids for hot `each()` loops:
 
 ```ts
 import type { ComponentQuery } from "snapscript";

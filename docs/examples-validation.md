@@ -57,6 +57,7 @@ Keep examples aligned with these user paths:
 - examples exercise command/event/snapshot behavior, not only render UI
 - the ECS example keeps the optimized `snapshotEncoding: "batched"` path exercised through public APIs
 - repeated render/read loops should use `each()` rather than `query().map()` when they do not need to keep query tuples
+- repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
 
 ## Benchmark Mapping
