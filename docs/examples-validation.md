@@ -22,10 +22,11 @@ The smoke test imports the example modules and runs host/client flows with in-me
 - `examples/ecs`
   - host creates player and NPC prefabs
   - host uses explicit all-visible interest policy
+  - host opts into negotiated batched dirty snapshots
   - client receives replicated query rows
   - client sends movement and damage commands
   - host system and command handlers update components
-  - client receives event state and can benchmark the same pair-`each()` render path used by UI snapshots
+  - client receives event state and can run its benchmark path
 
 ## API Friction Found
 
@@ -54,40 +55,17 @@ Keep examples aligned with these user paths:
 - transport adapters pass bytes and channel names without wrapping SnapScript packets in another framework protocol
 - all-visible examples should use `visibility: "all"` instead of dummy peer-specific overrides
 - examples exercise command/event/snapshot behavior, not only render UI
-- batched snapshots stay opt-in until the example-derived benchmark shows a CPU win, not only a byte-size win
+- the ECS example keeps the optimized `snapshotEncoding: "batched"` path exercised through public APIs
 - repeated render/read loops should use `each()` rather than `query().map()` when they do not need to keep query tuples
-- `query().map()` and `query().forEach()` are acceptable for ordinary readable code, but hot render/system paths should still graduate to `each()`
-- repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
-- helpers that only read replicated state should accept `ReplicatedStateReader`, so host/client rendering paths share one implementation without local casts
-- example setup helpers should return concrete values instead of optional objects that require non-null assertions in copied user code
 
 ## Benchmark Mapping
 
 Performance experiments should be tied back to those same user paths:
 
-- `test/benchmark-examples.test.ts` is the example-derived gate. It imports the real
-  `examples/ecs` protocol, components, and prefab definitions, then measures host movement,
-  host-to-client snapshot sync, and client render queries through public world APIs.
-- The benchmark has two modes when run on the current branch: `default-compatible`, which can be
-  copied into a main-branch worktree for apples-to-apples comparison, and `batched-opt-in`, which
-  tracks the negotiated batched snapshot path without making it the ECS example default.
-- End-to-end rows are also split into `host tick send`, `client tick apply`, and client render rows.
-  The split uses Tinybench hooks so packet generation for client-apply measurements is outside the
-  timed section. Stateful sync rows create a fresh example scenario for each measured sample, so
-  dirty masks, clocks, and transport queues do not bleed across iterations.
 - `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
-- `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
-- the `batched-opt-in` benchmark mode maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
+- `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, and `client readonly pair each render views`.
+- `examples/ecs` all-visible batched sync maps to host dirty fanout and slot-backed host dirty fanout benchmarks.
 - bitECS-inspired SOA prototypes are upper-bound comparisons only: they mutate entity-id indexed columns directly, while the public example must keep `world.each()`, readonly clients, dirty snapshots, and schema codecs.
-
-Cross-branch example comparison:
-
-```sh
-BENCH_TIME_MS=100 BENCH_WARMUP_TIME_MS=20 pnpm bench:branch:compare -- --main D:\src\snapscript-main-bench --test-file test/benchmark-examples.test.ts
-```
-
-The compare script sets `SNAPSCRIPT_BRANCH_COMPARE=1`, so current-branch-only benchmark modes are
-skipped while comparing against main.
 
 When public APIs change, update the examples first, then run `pnpm test:examples`, `pnpm example:simple:build`, and `pnpm example:ecs:build`.

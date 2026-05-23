@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { Bench, hrtimeNow } from "tinybench";
 import {
   createHostWorld,
   defineComponent,
@@ -10,7 +9,6 @@ import {
   type ClientWorld,
   type ClientTransport,
   type Clock,
-  type ComponentQuery,
   type ComponentSchema,
   type HostWorld,
   type HostTransport,
@@ -86,14 +84,6 @@ interface BenchRow {
 
 const DEFAULT_SAMPLES = 9;
 const DEFAULT_WARMUPS = 2;
-const DEFAULT_BENCH_TIME_MS = Math.max(
-  1,
-  Number.parseInt(process.env.BENCH_TIME_MS ?? "20", 10),
-);
-const DEFAULT_BENCH_WARMUP_TIME_MS = Math.max(
-  0,
-  Number.parseInt(process.env.BENCH_WARMUP_TIME_MS ?? "5", 10),
-);
 const BatchedUpdateComponentOp = 0xff;
 
 class BenchHostTransport implements HostTransport {
@@ -144,9 +134,6 @@ function clock(): Clock {
 const benchProtocol = defineProtocol({
   components: { Position, Velocity, Health },
 });
-const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
-const TripleQuery = [Position, Velocity, Health] as const satisfies ComponentQuery;
-const ReadonlyRenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
 function buildWorld(entityCount: number) {
   const world = createTestHostWorld(benchProtocol);
@@ -236,69 +223,49 @@ function storageRecord(entityId: number, schema: ComponentSchema): ComponentReco
   };
 }
 
-async function sample<T>(
+function time<T>(fn: () => T): { value: T; ms: number } {
+  const start = performance.now();
+  const value = fn();
+  return { value, ms: performance.now() - start };
+}
+
+function sample<T>(
   fn: () => T,
   samples = DEFAULT_SAMPLES,
   iterations = 1,
   warmups = DEFAULT_WARMUPS,
-): Promise<{
-  value: T;
-  ms: number;
-  minMs: number;
-  maxMs: number;
-  samples: number;
-  iterations: number;
-}> {
+): { value: T; ms: number; minMs: number; maxMs: number; samples: number; iterations: number } {
+  const timings: number[] = [];
   let value: T | undefined;
-  const minIterations = Math.max(iterations, samples);
-  const bench = new Bench({
-    iterations: minIterations,
-    now: hrtimeNow,
-    throws: true,
-    time: Math.max(DEFAULT_BENCH_TIME_MS, samples),
-    warmupIterations: warmups,
-    warmupTime: warmups === 0 ? 0 : DEFAULT_BENCH_WARMUP_TIME_MS,
-  });
-
-  bench.add("sample", () => {
-    value = fn();
-  });
-
-  if (warmups > 0 || DEFAULT_BENCH_WARMUP_TIME_MS > 0) {
-    await bench.warmup();
+  for (let index = 0; index < warmups; index += 1) {
+    fn();
+  }
+  for (let index = 0; index < samples; index += 1) {
+    const measured = time(() => {
+      let current: T | undefined;
+      for (let iteration = 0; iteration < iterations; iteration += 1) {
+        current = fn();
+      }
+      return current as T;
+    });
+    value = measured.value;
+    timings.push(measured.ms / iterations);
   }
 
-  const [task] = await bench.run();
-  const result = task?.result;
-  if (result === undefined || result.error !== undefined) {
-    throw result?.error ?? new Error("Benchmark sample did not produce a result");
-  }
-
+  const sorted = [...timings].sort((a, b) => a - b);
   return {
     value: value as T,
-    ms: median(result.samples),
-    minMs: result.min,
-    maxMs: result.max,
-    samples: result.samples.length,
-    iterations: minIterations,
+    ms: sorted[Math.floor(sorted.length / 2)]!,
+    minMs: sorted[0]!,
+    maxMs: sorted.at(-1)!,
+    samples,
+    iterations,
   };
-}
-
-function median(values: readonly number[]): number {
-  if (values.length === 0) {
-    return Number.NaN;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) {
-    return sorted[middle]!;
-  }
-  return (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
 function moveAll(world: HostWorld): number {
   let rows = 0;
-  world.each(MovementQuery, (_entity, pos, vel) => {
+  world.each([Position, Velocity] as const, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
     pos.y.value += vel.y.value;
     rows += 1;
@@ -308,7 +275,7 @@ function moveAll(world: HostWorld): number {
 
 function moveAndDampenAll(world: HostWorld): number {
   let rows = 0;
-  world.each(MovementQuery, (_entity, pos, vel) => {
+  world.each([Position, Velocity] as const, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
     pos.y.value += vel.y.value;
     vel.x.value *= 0.98;
@@ -320,28 +287,11 @@ function moveAndDampenAll(world: HostWorld): number {
 
 function touchTriple(world: HostWorld): number {
   let rows = 0;
-  world.each(TripleQuery, (_entity, pos, vel, health) => {
+  world.each([Position, Velocity, Health] as const, (_entity, pos, vel, health) => {
     pos.x.value += vel.x.value;
     rows += health.hp.value >= 0 ? 1 : 0;
   });
   return rows;
-}
-
-function repeatedPairEach(world: HostWorld, tuple: "inline" | "cached"): number {
-  let checksum = 0;
-  for (let pass = 0; pass < 1_000; pass += 1) {
-    if (tuple === "cached") {
-      world.each(MovementQuery, (_entity, pos, vel) => {
-        checksum += pos.x.value + vel.x.value;
-      });
-      continue;
-    }
-
-    world.each([Position, Velocity] as const, (_entity, pos, vel) => {
-      checksum += pos.x.value + vel.x.value;
-    });
-  }
-  return checksum === Number.POSITIVE_INFINITY ? 0 : checksum;
 }
 
 function countQuery(world: ReturnType<typeof createTestHostWorld>, mode: "single" | "pair" | "triple"): number {
@@ -394,17 +344,7 @@ function renderReadonlyViewsEach(world: ClientWorld): number {
 function renderReadonlyRequiredPairEach(world: ClientWorld): number {
   let rows = 0;
   let checksum = 0;
-  world.each(ReadonlyRenderQuery, (_entity, pos, health) => {
-    checksum += pos.x.value + pos.y.value + health.hp.value;
-    rows += 1;
-  });
-  return checksum === Number.POSITIVE_INFINITY ? 0 : rows;
-}
-
-function renderReadonlyRequiredPairForEach(world: ClientWorld): number {
-  let rows = 0;
-  let checksum = 0;
-  world.query(Position, Health).forEach(([_entity, pos, health]) => {
+  world.each([Position, Health] as const, (_entity, pos, health) => {
     checksum += pos.x.value + pos.y.value + health.hp.value;
     rows += 1;
   });
@@ -1187,7 +1127,7 @@ function formatEntityCountName(value: number): string {
 }
 
 describe("benchmark baselines", () => {
-  it("measures query, dirty encode, remote apply, churn, and peer fanout", async () => {
+  it("measures query, dirty encode, remote apply, churn, and peer fanout", () => {
     const registry = createRegistry()
       .registerComponent(Position)
       .registerComponent(Velocity)
@@ -1201,7 +1141,7 @@ describe("benchmark baselines", () => {
       const full = encodeDirty(source, 1);
       applySnapshot(target, full, registry);
 
-      const query = await sample(() => moveAll(source));
+      const query = sample(() => moveAll(source));
       rows.push({
         name: "each+mutate",
         entities: entityCount,
@@ -1214,7 +1154,7 @@ describe("benchmark baselines", () => {
       });
 
       let encodeTick = 2;
-      const encoded = await sample(() => {
+      const encoded = sample(() => {
         moveAll(source);
         return encodeDirty(source, encodeTick++);
       });
@@ -1229,7 +1169,7 @@ describe("benchmark baselines", () => {
         iterations: encoded.iterations,
       });
 
-      const applied = await sample(() => applySnapshot(target, encoded.value, registry));
+      const applied = sample(() => applySnapshot(target, encoded.value, registry));
       rows.push({
         name: "apply dirty",
         entities: entityCount,
@@ -1245,7 +1185,7 @@ describe("benchmark baselines", () => {
       const batchedTarget = createTestClientWorld(protocol);
       applySnapshot(batchedTarget, encodeDirty(batchedSource, 1), registry);
       let batchedTick = 2;
-      const batched = await sample(() => {
+      const batched = sample(() => {
         moveAll(batchedSource);
         return encodeDirtyBatched(batchedSource, batchedTick++);
       });
@@ -1260,7 +1200,7 @@ describe("benchmark baselines", () => {
         iterations: batched.iterations,
       });
 
-      const appliedBatched = await sample(() => applySnapshot(batchedTarget, batched.value, registry));
+      const appliedBatched = sample(() => applySnapshot(batchedTarget, batched.value, registry));
       rows.push({
         name: "apply dirty batched",
         entities: entityCount,
@@ -1276,7 +1216,7 @@ describe("benchmark baselines", () => {
       const multiTarget = createTestClientWorld(protocol);
       applySnapshot(multiTarget, encodeDirty(multiSource, 1), registry);
       let multiTick = 2;
-      const multiEncoded = await sample(() => {
+      const multiEncoded = sample(() => {
         moveAndDampenAll(multiSource);
         return encodeDirty(multiSource, multiTick++);
       });
@@ -1291,7 +1231,7 @@ describe("benchmark baselines", () => {
         iterations: multiEncoded.iterations,
       });
 
-      const multiApplied = await sample(() => applySnapshot(multiTarget, multiEncoded.value, registry));
+      const multiApplied = sample(() => applySnapshot(multiTarget, multiEncoded.value, registry));
       rows.push({
         name: "apply dirty multi-component",
         entities: entityCount,
@@ -1307,7 +1247,7 @@ describe("benchmark baselines", () => {
       const multiBatchedTarget = createTestClientWorld(protocol);
       applySnapshot(multiBatchedTarget, encodeDirty(multiBatchedSource, 1), registry);
       let multiBatchedTick = 2;
-      const multiBatched = await sample(() => {
+      const multiBatched = sample(() => {
         moveAndDampenAll(multiBatchedSource);
         return encodeDirtyBatched(multiBatchedSource, multiBatchedTick++);
       });
@@ -1322,7 +1262,7 @@ describe("benchmark baselines", () => {
         iterations: multiBatched.iterations,
       });
 
-      const multiBatchedApplied = await sample(() =>
+      const multiBatchedApplied = sample(() =>
         applySnapshot(multiBatchedTarget, multiBatched.value, registry),
       );
       rows.push({
@@ -1339,7 +1279,7 @@ describe("benchmark baselines", () => {
 
     for (const entityCount of [1_000, 10_000]) {
       const slotSource = buildSlotBackedWorld(entityCount);
-      const slotQuery = await sample(() => moveAll(slotSource));
+      const slotQuery = sample(() => moveAll(slotSource));
       rows.push({
         name: "slot-backed world each+mutate",
         entities: entityCount,
@@ -1352,7 +1292,7 @@ describe("benchmark baselines", () => {
       });
 
       let slotTick = 2;
-      const slotEncoded = await sample(() => {
+      const slotEncoded = sample(() => {
         moveAll(slotSource);
         return encodeDirty(slotSource, slotTick++);
       });
@@ -1371,11 +1311,11 @@ describe("benchmark baselines", () => {
       const slotApplyTarget = buildSlotBackedClientWorld();
       applySnapshot(slotApplyTarget, encodeDirty(slotApplySource, 1), registry);
       let slotApplyTick = 2;
-      const slotApplyEncoded = await sample(() => {
+      const slotApplyEncoded = sample(() => {
         moveAll(slotApplySource);
         return encodeDirty(slotApplySource, slotApplyTick++);
       });
-      const slotApplied = await sample(() =>
+      const slotApplied = sample(() =>
         applySnapshot(slotApplyTarget, slotApplyEncoded.value, registry),
       );
       rows.push({
@@ -1391,7 +1331,7 @@ describe("benchmark baselines", () => {
 
       const slotMultiSource = buildSlotBackedWorld(entityCount);
       let slotMultiTick = 2;
-      const slotMultiEncoded = await sample(() => {
+      const slotMultiEncoded = sample(() => {
         moveAndDampenAll(slotMultiSource);
         return encodeDirtyBatched(slotMultiSource, slotMultiTick++);
       });
@@ -1410,11 +1350,11 @@ describe("benchmark baselines", () => {
       const slotMultiApplyTarget = buildSlotBackedClientWorld();
       applySnapshot(slotMultiApplyTarget, encodeDirty(slotMultiApplySource, 1), registry);
       let slotMultiApplyTick = 2;
-      const slotMultiApplyEncoded = await sample(() => {
+      const slotMultiApplyEncoded = sample(() => {
         moveAndDampenAll(slotMultiApplySource);
         return encodeDirtyBatched(slotMultiApplySource, slotMultiApplyTick++);
       });
-      const slotMultiApplied = await sample(() =>
+      const slotMultiApplied = sample(() =>
         applySnapshot(slotMultiApplyTarget, slotMultiApplyEncoded.value, registry),
       );
       rows.push({
@@ -1435,29 +1375,11 @@ describe("benchmark baselines", () => {
       ["sparse pair query 50k", buildMixedWorld(50_000, 20), "pair"],
       ["triple query 50k", buildMixedWorld(50_000, 2), "triple"],
     ] as const) {
-      const measured = await sample(() => countQuery(world, mode));
+      const measured = sample(() => countQuery(world, mode));
       rows.push({
         name,
         entities: 50_000,
         rows: measured.value,
-        ms: measured.ms,
-        minMs: measured.minMs,
-        maxMs: measured.maxMs,
-        samples: measured.samples,
-        iterations: measured.iterations,
-      });
-    }
-
-    for (const [name, tuple] of [
-      ["inline tuple repeated pair each 10x1000", "inline"],
-      ["cached tuple repeated pair each 10x1000", "cached"],
-    ] as const) {
-      const world = buildWorld(10);
-      const measured = await sample(() => repeatedPairEach(world, tuple));
-      rows.push({
-        name,
-        entities: 10,
-        rows: 10_000,
         ms: measured.ms,
         minMs: measured.minMs,
         maxMs: measured.maxMs,
@@ -1482,7 +1404,7 @@ describe("benchmark baselines", () => {
       const target = targetFactory();
       applySnapshot(target, encodeDirty(source, 1), registry);
 
-      const queryMeasured = await sample(() => readonlyQueryLength(target));
+      const queryMeasured = sample(() => readonlyQueryLength(target));
       rows.push({
         name: `${storageName} readonly pair query.length 50k`,
         entities: 50_000,
@@ -1494,7 +1416,7 @@ describe("benchmark baselines", () => {
         iterations: queryMeasured.iterations,
       });
 
-      const renderMeasured = await sample(() => renderReadonlyViews(target));
+      const renderMeasured = sample(() => renderReadonlyViews(target));
       rows.push({
         name: `${storageName} readonly render views 50k`,
         entities: 50_000,
@@ -1506,7 +1428,7 @@ describe("benchmark baselines", () => {
         iterations: renderMeasured.iterations,
       });
 
-      const eachRenderMeasured = await sample(() => renderReadonlyViewsEach(target));
+      const eachRenderMeasured = sample(() => renderReadonlyViewsEach(target));
       rows.push({
         name: `${storageName} readonly each render views 50k`,
         entities: 50_000,
@@ -1518,19 +1440,7 @@ describe("benchmark baselines", () => {
         iterations: eachRenderMeasured.iterations,
       });
 
-      const pairForEachRenderMeasured = await sample(() => renderReadonlyRequiredPairForEach(target));
-      rows.push({
-        name: `${storageName} readonly pair query.forEach render views 50k`,
-        entities: 50_000,
-        rows: pairForEachRenderMeasured.value,
-        ms: pairForEachRenderMeasured.ms,
-        minMs: pairForEachRenderMeasured.minMs,
-        maxMs: pairForEachRenderMeasured.maxMs,
-        samples: pairForEachRenderMeasured.samples,
-        iterations: pairForEachRenderMeasured.iterations,
-      });
-
-      const pairEachRenderMeasured = await sample(() => renderReadonlyRequiredPairEach(target));
+      const pairEachRenderMeasured = sample(() => renderReadonlyRequiredPairEach(target));
       rows.push({
         name: `${storageName} readonly pair each render views 50k`,
         entities: 50_000,
@@ -1569,7 +1479,7 @@ describe("benchmark baselines", () => {
       for (const entityCount of storageEntityCounts) {
         for (const [queryName, componentIds, velocityEvery] of storageQueries) {
           const storage = buildStorage(factory(), entityCount, velocityEvery);
-          const measured = await sample(() => countStorageRows(storage, componentIds));
+          const measured = sample(() => countStorageRows(storage, componentIds));
           rows.push({
             name: `${storageName} ${queryName} ${formatEntityCountName(entityCount)}`,
             entities: entityCount,
@@ -1583,7 +1493,7 @@ describe("benchmark baselines", () => {
         }
 
         const componentChurnStorageTarget = buildStorage(factory(), entityCount, 1);
-        const componentChurn = await sample(() =>
+        const componentChurn = sample(() =>
           churnStorageComponents(componentChurnStorageTarget, entityCount),
         );
         rows.push({
@@ -1599,7 +1509,7 @@ describe("benchmark baselines", () => {
       }
 
       const churnStorageTarget = buildStorage(factory(), 1_000, 1);
-      const measured = await sample(() => churnStorage(churnStorageTarget, 1_000_000));
+      const measured = sample(() => churnStorage(churnStorageTarget, 1_000_000));
       rows.push({
         name: `${storageName} entity add/remove churn 1k`,
         entities: 1_000,
@@ -1614,7 +1524,7 @@ describe("benchmark baselines", () => {
 
     for (const entityCount of storageEntityCounts) {
       const materializationTable = buildSlotMaterializationTable(entityCount);
-      const materialized = await sample(() => materializeSlotTableRows(materializationTable));
+      const materialized = sample(() => materializeSlotTableRows(materializationTable));
       rows.push({
         name: `slot table row materialization ${formatEntityCountName(entityCount)}`,
         entities: entityCount,
@@ -1630,7 +1540,7 @@ describe("benchmark baselines", () => {
     for (const entityCount of storageEntityCounts) {
       const churnTable = buildSlotChurnTable(entityCount);
       let nextEntityId = 1_000_000;
-      const churn = await sample(() => {
+      const churn = sample(() => {
         const rowsChurned = churnSlotTableRows(churnTable, nextEntityId);
         nextEntityId += rowsChurned;
         return rowsChurned;
@@ -1648,7 +1558,7 @@ describe("benchmark baselines", () => {
     }
 
     const tripleEachWorld = buildMixedWorld(50_000, 2);
-    const tripleEach = await sample(() => touchTriple(tripleEachWorld));
+    const tripleEach = sample(() => touchTriple(tripleEachWorld));
     rows.push({
       name: "triple each 50k",
       entities: 50_000,
@@ -1667,7 +1577,7 @@ describe("benchmark baselines", () => {
       ["soa prototype sparse move 50k", 50_000, 20],
     ] as const) {
       const soa = buildSoAPrototype(entityCount, velocityEvery);
-      const measured = await sample(() => moveSoAPrototype(soa));
+      const measured = sample(() => moveSoAPrototype(soa));
       rows.push({
         name,
         entities: entityCount,
@@ -1687,7 +1597,7 @@ describe("benchmark baselines", () => {
       ["slot soa prototype sparse move 50k", 50_000, 20],
     ] as const) {
       const soa = buildSlotBackedSoAPrototype(entityCount, velocityEvery);
-      const measured = await sample(() => moveSlotBackedSoAPrototype(soa));
+      const measured = sample(() => moveSlotBackedSoAPrototype(soa));
       rows.push({
         name,
         entities: entityCount,
@@ -1707,7 +1617,7 @@ describe("benchmark baselines", () => {
       ["bitecs-style soa sparse move 50k", 50_000, 20],
     ] as const) {
       const soa = buildBitecsStylePrototype(entityCount, velocityEvery);
-      const measured = await sample(() => moveBitecsStylePrototype(soa));
+      const measured = sample(() => moveBitecsStylePrototype(soa));
       rows.push({
         name,
         entities: entityCount,
@@ -1727,7 +1637,7 @@ describe("benchmark baselines", () => {
       ["bitecs-0.4 array soa sparse move 50k", 50_000, 20],
     ] as const) {
       const soa = buildBitecsArrayStylePrototype(entityCount, velocityEvery);
-      const measured = await sample(() => moveBitecsArrayStylePrototype(soa));
+      const measured = sample(() => moveBitecsArrayStylePrototype(soa));
       rows.push({
         name,
         entities: entityCount,
@@ -1748,7 +1658,7 @@ describe("benchmark baselines", () => {
     ] as const) {
       const soa = buildSlotBackedSoAPrototype(entityCount, velocityEvery);
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotBackedSoAPrototype(soa);
         return encodeSlotBackedPositionDeltas(soa, tick++);
       });
@@ -1765,7 +1675,7 @@ describe("benchmark baselines", () => {
       });
 
       const target = buildSlotBackedSoAPrototype(entityCount, velocityEvery);
-      const applied = await sample(() => applySlotBackedPositionDeltas(target, measured.value));
+      const applied = sample(() => applySlotBackedPositionDeltas(target, measured.value));
       rows.push({
         name: name.replace("encode", "apply"),
         entities: entityCount,
@@ -1787,7 +1697,7 @@ describe("benchmark baselines", () => {
     ] as const) {
       const table = buildSlotTablePrototype(entityCount, velocityEvery);
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotTablePrototype(table);
         return encodeSlotTablePositionDeltas(table, tick++);
       });
@@ -1804,7 +1714,7 @@ describe("benchmark baselines", () => {
       });
 
       const target = buildSlotTablePrototype(entityCount, velocityEvery);
-      const applied = await sample(() => applySlotTablePositionDeltas(target, measured.value));
+      const applied = sample(() => applySlotTablePositionDeltas(target, measured.value));
       rows.push({
         name: name.replace("move+encode", "apply"),
         entities: entityCount,
@@ -1826,7 +1736,7 @@ describe("benchmark baselines", () => {
     ] as const) {
       const table = buildSlotTablePrototype(entityCount, velocityEvery);
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotTablePrototype(table);
         return encodeSlotTablePositionDeltasBulk(table, tick++);
       });
@@ -1843,7 +1753,7 @@ describe("benchmark baselines", () => {
       });
 
       const target = buildSlotTablePrototype(entityCount, velocityEvery);
-      const applied = await sample(() => applySlotTablePositionDeltasBulk(target, measured.value));
+      const applied = sample(() => applySlotTablePositionDeltasBulk(target, measured.value));
       rows.push({
         name: name.replace("encode", "apply"),
         entities: entityCount,
@@ -1866,7 +1776,7 @@ describe("benchmark baselines", () => {
       const table = buildSlotTablePrototype(entityCount, velocityEvery);
       const writer = new BitWriter();
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotTablePrototype(table);
         return encodeSlotTablePositionDeltasBulkPooled(table, tick++, writer);
       });
@@ -1892,7 +1802,7 @@ describe("benchmark baselines", () => {
       const table = buildSlotTablePrototype(entityCount, velocityEvery);
       const writer = new ByteWriter();
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotTablePrototype(table);
         return encodeSlotTablePositionDeltasBulkByteWriter(table, tick++, writer);
       });
@@ -1918,7 +1828,7 @@ describe("benchmark baselines", () => {
       const table = buildSlotTablePrototype(entityCount, velocityEvery);
       const writer = new BitWriter();
       let tick = 1;
-      const measured = await sample(() => {
+      const measured = sample(() => {
         moveSlotTablePrototype(table);
         return encodeSlotTablePositionDeltasBatched(table, tick++, writer);
       });
@@ -1935,7 +1845,7 @@ describe("benchmark baselines", () => {
       });
 
       const target = buildSlotTablePrototype(entityCount, velocityEvery);
-      const applied = await sample(() => applySlotTablePositionDeltasBatched(target, measured.value));
+      const applied = sample(() => applySlotTablePositionDeltasBatched(target, measured.value));
       rows.push({
         name: name.replace("encode", "apply"),
         entities: entityCount,
@@ -1957,7 +1867,7 @@ describe("benchmark baselines", () => {
         const table = buildMultiSlotTablePrototype(1_000, 1);
         const writer = new BitWriter();
         let tick = 1;
-        const measured = await sample(() => {
+        const measured = sample(() => {
           moveMultiSlotTablePrototype(table);
           const bytes = encoder(table, tick++, writer);
           return {
@@ -1985,7 +1895,7 @@ describe("benchmark baselines", () => {
       ["slot table dense forEach move 50k", 50_000],
     ] as const) {
       const table = buildSlotTablePrototype(entityCount, 1);
-      const measured = await sample(() => moveSlotTableDensePrototype(table));
+      const measured = sample(() => moveSlotTableDensePrototype(table));
       rows.push({
         name,
         entities: entityCount,
@@ -2004,7 +1914,7 @@ describe("benchmark baselines", () => {
       ["sparse pair query.length 50k", buildMixedWorld(50_000, 20), "pair"],
       ["triple query.length 50k", buildMixedWorld(50_000, 2), "triple"],
     ] as const) {
-      const measured = await sample(() => queryLength(world, mode), DEFAULT_SAMPLES, 1_000);
+      const measured = sample(() => queryLength(world, mode), DEFAULT_SAMPLES, 1_000);
       rows.push({
         name,
         entities: 50_000,
@@ -2019,7 +1929,7 @@ describe("benchmark baselines", () => {
 
     const churnWorld = buildWorld(1_000);
     encodeDirty(churnWorld, 1);
-    const churn = await sample(() => {
+    const churn = sample(() => {
       const spawned = [];
       for (let i = 0; i < 500; i += 1) {
         spawned.push(churnWorld.spawn());
@@ -2067,7 +1977,7 @@ describe("benchmark baselines", () => {
           advertiseBatchedSnapshotSupport(transport);
         }
         transport.sent.splice(0);
-        const fanout = await sample(() => {
+        const fanout = sample(() => {
           transport.sent.splice(0);
           mutate(host);
           host.tick();
@@ -2120,7 +2030,7 @@ describe("benchmark baselines", () => {
           advertiseBatchedSnapshotSupport(transport);
         }
         transport.sent.splice(0);
-        const fanout = await sample(() => {
+        const fanout = sample(() => {
           transport.sent.splice(0);
           mutate(host);
           host.tick();
@@ -2156,7 +2066,7 @@ describe("benchmark baselines", () => {
           row.maxMs >= row.minMs,
       ),
     ).toBe(true);
-  }, 120_000);
+  }, 15_000);
 });
 
 function advertiseBatchedSnapshotSupport(transport: BenchHostTransport): void {

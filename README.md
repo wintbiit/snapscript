@@ -201,28 +201,6 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 
 World handles are frozen runtime objects. Keep non-replicated host application state in your own objects.
 
-When a helper only needs to read replicated state, type it as `ReplicatedStateReader`. Both `HostWorld`
-and `ClientWorld` satisfy this read-only surface, so render snapshots and debug inspectors can share one
-implementation without casts:
-
-```ts
-import type { ComponentQuery, ReplicatedStateReader } from "snapscript";
-
-const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
-
-function collectViews(state: ReplicatedStateReader) {
-  const views: { id: number; x: number; hp: number }[] = [];
-  state.each(RenderQuery, (entity, position, health) => {
-    views.push({
-      id: entity.id,
-      x: position.x.value,
-      hp: health.hp.value,
-    });
-  });
-  return views;
-}
-```
-
 ## ECS API
 
 The public ECS surface is intentionally small:
@@ -241,9 +219,9 @@ The public ECS surface is intentionally small:
 
 Use `spawn()` to create entities. `add()` requires an existing entity; it does not create arbitrary raw ids or resurrect destroyed refs.
 
-Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. The `.map()` and `.forEach()` helpers stream storage rows directly, so they are fine for ordinary gameplay code. Use `each()` in hot systems and repeated render/read loops because it still avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
+Use `query()` when you want a lazy iterable result with `.length`, `.map()`, `.forEach()`, and `.toArray()`. Use `each()` in hot systems and repeated render/read loops because it avoids materializing public query tuples. If every rendered row needs multiple components, put those components in the same `each()` query instead of calling `get()` inside the loop.
 
-Reusable query tuples should preserve tuple inference. Reusing the same tuple object also lets the runtime cache component ids for hot `each()` loops:
+Reusable query tuples should preserve tuple inference:
 
 ```ts
 import type { ComponentQuery } from "snapscript";
@@ -420,15 +398,7 @@ Run benchmarks with:
 pnpm bench
 ```
 
-Timing benchmarks use `tinybench` with `process.hrtime.bigint()` and a minimum of 9 measured
-iterations per scenario. Cross-branch comparisons can run the same compatible benchmark against a
-main-branch worktree:
-
-```sh
-pnpm bench:branch:compare -- --main D:\src\snapscript-main-bench
-```
-
-The current benchmark covers:
+The benchmark reports median/min/max wall-clock time across 9 samples. The current benchmark covers:
 
 - query and `each()` loops
 - dirty snapshot encode
@@ -437,7 +407,6 @@ The current benchmark covers:
 - component add/remove churn
 - fanout across peers
 - map storage vs sparse-set vs sparse-set plus archetype index
-- example-derived ECS host movement, host sync, and client render paths
 
 Representative local run on 2026-05-23:
 
@@ -453,18 +422,6 @@ Representative local run on 2026-05-23:
 The tradeoff is structural churn. Component add/remove churn is currently about 2.6x to 3.0x slower than the map baseline in the microbenchmark because the archetype index maintains signatures and buckets. This is acceptable for query-heavy worlds, but high-churn worlds are the first tuning target.
 
 SoA storage is not part of the current default. It remains a future internal storage option because it would change `NetRef` from a value holder into a slot handle and affect query, dirty tracking, snapshot encoding, and codec paths.
-
-Example-derived benchmarks use `examples/ecs` protocol, prefab definitions, host movement logic,
-full snapshot handshakes, dirty sync, and client render queries. They are the preferred regression
-gate for user-visible performance because they measure the same world API shape developers copy from
-the examples. Microbenchmarks are still useful for isolating storage and codec costs, but they should
-not be treated as proof of end-to-end framework speed by themselves.
-
-The example benchmark includes a main-compatible default mode and a separate batched opt-in mode.
-Batched snapshots reduce bytes, but the 10k ECS example still shows higher CPU cost than the default
-packet shape, so the ECS example uses the default packet shape until batched host encoding is faster.
-The benchmark splits the frame into host send, client apply, and render phases so regressions point
-to a concrete runtime path.
 
 ## Internal Architecture Notes
 

@@ -19,7 +19,8 @@ import {
   type PeerRef,
   type ClientWorld,
   type HostWorld,
-  type ReplicatedStateReader,
+  type ReadonlyComponentInstanceOf,
+  type ReadonlyEntityRef,
 } from "snapscript";
 
 export const Position = defineComponent("EcsExamplePosition", {
@@ -44,8 +45,7 @@ export const Player = defineEntity("EcsExamplePlayer", {
 });
 
 // Reusable query tuples should keep literal tuple inference for typed each/query rows.
-export const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
-export const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
+const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
 
 export const MoveCommand = defineCommand("EcsExampleMove", {
   dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
@@ -88,11 +88,6 @@ export interface DemoSnapshot {
   readonly lastEvent: string | undefined;
   readonly entities: readonly EntityView[];
   readonly benchmark: string;
-}
-
-export interface EcsExampleActors {
-  readonly player: EntityRef;
-  readonly npc: EntityRef;
 }
 
 export class BrowserClock implements Clock {
@@ -263,14 +258,30 @@ export class HostDemo {
       clock: this.clock,
       // Keep the example's interest model explicit: every entity is visible to every peer.
       visibility: "all",
+      // Opt into the negotiated batched snapshot path used by query-heavy ECS examples.
+      snapshotEncoding: "batched",
     });
 
-    const actors = seedEcsExampleActors(this.world);
-    this.player = actors.player;
-    this.npc = actors.npc;
+    // Host constructs and owns all authoritative entities.
+    this.player = this.world.spawn(Player, {
+      position: { x: -4, y: 0 },
+      health: { hp: 100 },
+    });
+    this.npc = this.world.spawn();
+    this.world.add(this.npc, Player, {
+      position: { x: 5, y: 2 },
+      velocity: { x: -0.02, y: 0 },
+      health: { hp: 60 },
+    });
 
     this.world.system("movement", "update", (world) => {
-      runEcsMovementSystem(world);
+      // `each()` avoids materializing public query rows in hot update loops.
+      world.each(MovementQuery, (_entity, pos, vel) => {
+        pos.x.value += vel.x.value;
+        pos.y.value += vel.y.value;
+        vel.x.value *= 0.92;
+        vel.y.value *= 0.92;
+      });
     });
 
     this.world.on(MoveCommand, (payload) => {
@@ -385,8 +396,8 @@ export class ClientDemo {
 
   runBenchmark(): void {
     const start = performance.now();
-    const rows = toViews(this.world).length;
-    this.#benchmark = `${rows} rendered views in ${(performance.now() - start).toFixed(2)} ms`;
+    const rows = this.world.query(Position, Health).length;
+    this.#benchmark = `${rows} visible rows in ${(performance.now() - start).toFixed(2)} ms`;
   }
 
   snapshot(): DemoSnapshot {
@@ -408,57 +419,21 @@ export class ClientDemo {
   }
 }
 
-export function seedEcsExampleActors(world: HostWorld, extraNpcCount = 0): EcsExampleActors {
-  // Host constructs and owns all authoritative entities.
-  const player = world.spawn(Player, {
-    position: { x: -4, y: 0 },
-    health: { hp: 100 },
-  });
-  const npc = world.spawn();
-  world.add(npc, Player, {
-    position: { x: 5, y: 2 },
-    velocity: { x: -0.02, y: 0 },
-    health: { hp: 60 },
-  });
-  seedExtraEcsExampleActors(world, extraNpcCount);
-  return { player, npc };
-}
-
-export function seedExtraEcsExampleActors(world: HostWorld, count: number): void {
-  for (let index = 0; index < count; index += 1) {
-    const entity = world.spawn();
-    world.add(entity, Player, {
-      position: {
-        x: (index % 64) - 32,
-        y: Math.floor(index / 64) % 64,
-      },
-      velocity: {
-        x: index % 2 === 0 ? 0.02 : -0.02,
-        y: index % 3 === 0 ? 0.01 : -0.01,
-      },
-      health: {
-        hp: 100 - (index % 40),
-      },
-    });
-  }
-}
-
-export function runEcsMovementSystem(world: HostWorld): number {
-  let rows = 0;
-  // `each()` avoids materializing public query rows in hot update loops.
-  world.each(MovementQuery, (_entity, pos, vel) => {
-    pos.x.value += vel.x.value;
-    pos.y.value += vel.y.value;
-    vel.x.value *= 0.92;
-    vel.y.value *= 0.92;
-    rows += 1;
-  });
-  return rows;
-}
-
-export function toViews(world: ReplicatedStateReader): EntityView[] {
+function toViews(world: HostWorld): EntityView[];
+function toViews(world: ClientWorld): EntityView[];
+function toViews(world: HostWorld | ClientWorld): EntityView[] {
+  const readable = world as unknown as {
+    each(
+      components: readonly [typeof Position, typeof Health],
+      fn: (
+        entity: ReadonlyEntityRef,
+        position: ReadonlyComponentInstanceOf<typeof Position>,
+        health: ReadonlyComponentInstanceOf<typeof Health>,
+      ) => void,
+    ): void;
+  };
   const views: EntityView[] = [];
-  world.each(RenderQuery, (entity, pos, health) => {
+  readable.each([Position, Health] as const, (entity, pos, health) => {
     // The example renders Player rows, so read required render components in one typed pass.
     views.push({
       id: entity.id,
