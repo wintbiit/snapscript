@@ -1,0 +1,2193 @@
+import type {
+  ChannelName,
+  ClientTransport,
+  Clock,
+  HostTransport,
+  Logger,
+  PeerRef,
+} from "../platform/index";
+import { isProtocolDefinition, registryForProtocol, type ProtocolDefinition } from "../protocol/index";
+import type {
+  CommandDefinition,
+  EventDefinition,
+  RpcDefinition,
+  RpcHandler,
+} from "../rpc/index";
+import {
+  createSyncClient,
+  createSyncHost,
+  type SyncClient,
+  type SyncHost,
+  type SyncHostOptions,
+  type SyncRuntimeOptions,
+} from "../runtime/index";
+import { fieldsForSchema } from "../schema/index";
+import { assertPlainObjectMap, isPlainObjectMap } from "../utils/object";
+import type {
+  ComponentSchema,
+  EntitySchema,
+  FieldDefinitions,
+  FieldValue,
+  FieldValues,
+  InternalFieldMeta,
+  InternalSchemaField,
+  PrefabDefinition,
+  SimpleEntityDefinition,
+} from "../schema/index";
+import { DirtyGraph } from "./dirty-graph";
+import { registerWorldInternals, type WorldInternals } from "./internals";
+import { NetRefImpl, type NetRef, type ReadonlyNetRef } from "./net-ref";
+import type { ComponentRecord } from "./records";
+import { SparseSetComponentStorage } from "./storage";
+
+/** Mutable component instance returned from host-world reads. Write replicated fields through `NetRef.value`. */
+export type ComponentInstance<TFields extends FieldDefinitions> = {
+  readonly entityId: number;
+  readonly id: number;
+  readonly schema: ComponentSchema<TFields>;
+} & {
+  readonly [K in keyof TFields]: NetRef<FieldValue<TFields[K]>>;
+};
+
+/** Read-only component instance returned from client worlds and interest hooks. */
+export type ReadonlyComponentInstance<TFields extends FieldDefinitions> = {
+  readonly entityId: number;
+  readonly id: number;
+  readonly schema: ComponentSchema<TFields>;
+} & {
+  readonly [K in keyof TFields]: ReadonlyNetRef<FieldValue<TFields[K]>>;
+};
+
+export type EntityInstance<TFields extends FieldDefinitions> = ComponentInstance<TFields>;
+
+export type ComponentFieldsOf<TComponent extends ComponentSchema<any>> =
+  TComponent extends ComponentSchema<infer TFields> ? TFields : never;
+
+export type ComponentInstanceOf<TComponent extends ComponentSchema<any>> = ComponentInstance<
+  ComponentFieldsOf<TComponent>
+>;
+
+export type ReadonlyComponentInstanceOf<TComponent extends ComponentSchema<any>> =
+  ReadonlyComponentInstance<ComponentFieldsOf<TComponent>>;
+
+type ComponentAccess = "mutable" | "readonly";
+export type ComponentQuery = readonly [ComponentSchema, ...ComponentSchema[]];
+export type ComponentOrPrefab = ComponentSchema | PrefabDefinition;
+
+type QueryComponentInstance<
+  TFields extends FieldDefinitions,
+  TAccess extends ComponentAccess,
+> = TAccess extends "readonly" ? ReadonlyComponentInstance<TFields> : ComponentInstance<TFields>;
+
+export type PrefabInstance<TComponents extends Record<string, ComponentSchema>> = {
+  readonly [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+    ? ComponentInstance<TFields>
+    : never;
+};
+
+export type ReadonlyPrefabInstance<TComponents extends Record<string, ComponentSchema>> = {
+  readonly [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+    ? ReadonlyComponentInstance<TFields>
+    : never;
+};
+
+export type PrefabComponentsOf<TPrefab extends PrefabDefinition<any>> =
+  TPrefab extends PrefabDefinition<infer TComponents> ? TComponents : never;
+
+export type PrefabInstanceOf<TPrefab extends PrefabDefinition<any>> = PrefabInstance<
+  PrefabComponentsOf<TPrefab>
+>;
+
+export type ReadonlyPrefabInstanceOf<TPrefab extends PrefabDefinition<any>> = ReadonlyPrefabInstance<
+  PrefabComponentsOf<TPrefab>
+>;
+
+/** Read-only entity identity visible to client and interest-policy code. */
+export interface ReadonlyEntityRef {
+  readonly id: number;
+}
+
+declare const entityRefBrand: unique symbol;
+
+/** Host-authored entity identity returned by `HostWorld.spawn()`. */
+export interface EntityRef extends ReadonlyEntityRef {
+  readonly [entityRefBrand]: "host";
+}
+
+/** Ordered system phase run by `world.tick()`. */
+export type SystemPhase = "preUpdate" | "update" | "postUpdate" | "network";
+
+const systemPhases = new Set<string>(["preUpdate", "update", "postUpdate", "network"]);
+
+/** Frozen timing context passed to systems during one world tick. */
+export interface SystemContext {
+  readonly tick: number;
+  readonly dtMs: number;
+  readonly nowMs: number;
+  readonly phase: SystemPhase;
+}
+
+/** Frozen context passed after a client applies a snapshot. */
+export interface SnapshotContext {
+  readonly tick: number;
+  readonly channel: ChannelName;
+}
+
+/** System callback registered on a host or client world. */
+export type SystemFn<TWorld extends HostWorld | ClientWorld = HostWorld | ClientWorld> = (
+  world: TWorld,
+  context: SystemContext,
+) => void;
+
+/** Client callback invoked after snapshot apply. Use it for sampling, interpolation buffers, or diagnostics. */
+export type SnapshotHandler<TWorld extends ClientWorld = ClientWorld> = (
+  world: TWorld,
+  context: SnapshotContext,
+) => void;
+
+type FrameContext = Omit<SystemContext, "phase">;
+
+export type QueryRow<
+  TComponents extends readonly ComponentSchema[],
+  TEntity extends ReadonlyEntityRef = EntityRef,
+  TAccess extends ComponentAccess = "mutable",
+> = [
+  TEntity,
+  ...{
+    [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+      ? QueryComponentInstance<TFields, TAccess>
+      : never;
+  },
+];
+
+export type EachFn<
+  TComponents extends readonly ComponentSchema[],
+  TEntity extends ReadonlyEntityRef = EntityRef,
+  TAccess extends ComponentAccess = "mutable",
+> = (
+  entity: TEntity,
+  ...components: {
+    [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+      ? QueryComponentInstance<TFields, TAccess>
+      : never;
+  }
+) => void;
+
+/** Lazy query result. Iteration streams rows; `toArray()` materializes them. */
+export interface QueryResult<
+  TComponents extends readonly ComponentSchema[],
+  TEntity extends ReadonlyEntityRef = EntityRef,
+  TAccess extends ComponentAccess = "mutable",
+> extends Iterable<QueryRow<TComponents, TEntity, TAccess>> {
+  readonly length: number;
+  map<TResult>(
+    fn: (row: QueryRow<TComponents, TEntity, TAccess>, index: number) => TResult,
+  ): TResult[];
+  forEach(fn: (row: QueryRow<TComponents, TEntity, TAccess>, index: number) => void): void;
+  toArray(): QueryRow<TComponents, TEntity, TAccess>[];
+}
+
+interface QueryWorldAccess<
+  TEntity extends ReadonlyEntityRef = EntityRef,
+  TAccess extends ComponentAccess = "mutable",
+> {
+  _queryRows(components: readonly ComponentSchema[]): Iterable<{
+    readonly entityId: number;
+    readonly first?: ComponentRecord;
+    readonly second?: ComponentRecord;
+    readonly third?: ComponentRecord;
+    readonly fourth?: ComponentRecord;
+    readonly records?: readonly ComponentRecord[];
+  }>;
+  _queryCount(components: readonly ComponentSchema[]): number;
+  _entityRef(entityId: number): TEntity;
+  _component?(record: ComponentRecord): QueryComponentInstance<FieldDefinitions, TAccess>;
+}
+
+class QueryResultImpl<
+  TComponents extends readonly ComponentSchema[],
+  TEntity extends ReadonlyEntityRef = EntityRef,
+  TAccess extends ComponentAccess = "mutable",
+> implements QueryResult<TComponents, TEntity, TAccess>
+{
+  constructor(
+    private readonly world: QueryWorldAccess<TEntity, TAccess>,
+    private readonly components: TComponents,
+  ) {}
+
+  get length(): number {
+    return this.world._queryCount(this.components);
+  }
+
+  [Symbol.iterator](): Iterator<QueryRow<TComponents, TEntity, TAccess>> {
+    const components = this.components;
+    const iterator = this.world._queryRows(components)[Symbol.iterator]();
+    const world = this.world;
+    const component = world._component;
+
+    return {
+      next(): IteratorResult<QueryRow<TComponents, TEntity, TAccess>> {
+        const next = iterator.next();
+        if (next.done === true) {
+          return { done: true, value: undefined };
+        }
+
+        const { entityId } = next.value;
+        const entity = world._entityRef(entityId);
+        if (components.length === 0) {
+          return {
+            done: false,
+            value: [entity] as unknown as QueryRow<TComponents, TEntity, TAccess>,
+          };
+        }
+        if (components.length === 1) {
+          return {
+            done: false,
+            value: [
+              entity,
+              component === undefined ? next.value.first!.instance : component(next.value.first!),
+            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
+          };
+        }
+        if (components.length === 2) {
+          return {
+            done: false,
+            value: [
+              entity,
+              component === undefined ? next.value.first!.instance : component(next.value.first!),
+              component === undefined ? next.value.second!.instance : component(next.value.second!),
+            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
+          };
+        }
+        if (components.length === 3) {
+          return {
+            done: false,
+            value: [
+              entity,
+              component === undefined ? next.value.first!.instance : component(next.value.first!),
+              component === undefined ? next.value.second!.instance : component(next.value.second!),
+              component === undefined ? next.value.third!.instance : component(next.value.third!),
+            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
+          };
+        }
+        if (components.length === 4) {
+          return {
+            done: false,
+            value: [
+              entity,
+              component === undefined ? next.value.first!.instance : component(next.value.first!),
+              component === undefined ? next.value.second!.instance : component(next.value.second!),
+              component === undefined ? next.value.third!.instance : component(next.value.third!),
+              component === undefined ? next.value.fourth!.instance : component(next.value.fourth!),
+            ] as unknown as QueryRow<TComponents, TEntity, TAccess>,
+          };
+        }
+
+        const row: unknown[] = [entity];
+        const records = next.value.records ?? [];
+        for (const record of records) {
+          row.push(component === undefined ? record.instance : component(record));
+        }
+        return { done: false, value: row as QueryRow<TComponents, TEntity, TAccess> };
+      },
+    };
+  }
+
+  map<TResult>(
+    fn: (row: QueryRow<TComponents, TEntity, TAccess>, index: number) => TResult,
+  ): TResult[] {
+    if (!isFunction(fn)) {
+      throw new Error("QueryResult.map() requires a function");
+    }
+    const result: TResult[] = [];
+    let index = 0;
+    for (const row of this) {
+      result.push(fn(row, index));
+      index += 1;
+    }
+    return result;
+  }
+
+  forEach(fn: (row: QueryRow<TComponents, TEntity, TAccess>, index: number) => void): void {
+    if (!isFunction(fn)) {
+      throw new Error("QueryResult.forEach() requires a function");
+    }
+    let index = 0;
+    for (const row of this) {
+      fn(row, index);
+      index += 1;
+    }
+  }
+
+  toArray(): QueryRow<TComponents, TEntity, TAccess>[] {
+    return [...this];
+  }
+}
+
+/** Options for constructing an authoritative host world. */
+export interface HostWorldOptions {
+  readonly protocol: ProtocolDefinition;
+  readonly transport: HostTransport;
+  readonly clock: Clock;
+  readonly logger?: Logger;
+  readonly visibility?: "all" | "none";
+  readonly interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
+}
+
+/** Options for constructing a replicated client world. */
+export interface ClientWorldOptions {
+  readonly protocol: ProtocolDefinition;
+  readonly transport: ClientTransport;
+  readonly clock: Clock;
+  readonly logger?: Logger;
+}
+
+/** Read-only world view passed to host interest hooks. */
+export interface InterestWorld {
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): ReadonlyPrefabInstance<TComponents> | undefined;
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean;
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents, ReadonlyEntityRef, "readonly">;
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
+  ): void;
+}
+
+function createWorldInternals(core: WorldCore): WorldInternals {
+  return {
+    getRecord: (entityId, componentId) => core._getRecord(entityId, componentId),
+    getRecords: () => core._getRecords(),
+    getEntityIds: () => core._getEntityIds(),
+    getDirtySnapshot: () => core._getDirtySnapshot(),
+    clearWrittenDirty: (ops) => core._clearWrittenDirty(ops),
+    getDirtyMask: (entityId, componentId) => core._getDirtyMask(entityId, componentId),
+    entityRef: (entityId) => core._entityRef(entityId),
+    spawnRemote: (component, entityId) => core._spawnRemote(component, entityId),
+    applyCreateEntityFromRemote: (entityId) => core._applyCreateEntityFromRemote(entityId),
+    applyRemoveFromRemote: (entityId, componentId) =>
+      core._applyRemoveFromRemote(entityId, componentId),
+    applyDestroyFromRemote: (entityId, schemaId) =>
+      core._applyDestroyFromRemote(entityId, schemaId),
+  };
+}
+
+class WorldCore implements QueryWorldAccess {
+  readonly dirty = new DirtyGraph();
+  readonly #storage = new SparseSetComponentStorage();
+  readonly #systems = new Map<SystemPhase, { name: string; fn: SystemFn }[]>();
+  readonly #entityRefs = new Map<number, EntityRef>();
+  readonly #readonlyEntityRefs = new Map<number, ReadonlyEntityRef>();
+  readonly #readonlyComponents = new WeakMap<
+    ComponentInstance<FieldDefinitions>,
+    ReadonlyComponentInstance<FieldDefinitions>
+  >();
+  readonly #protocol: ProtocolDefinition;
+  readonly #protocolPrefabs = new WeakSet<PrefabDefinition>();
+  readonly #knownProtocolComponents = new WeakSet<ComponentSchema>();
+  readonly #knownProtocolPrefabs = new WeakSet<PrefabDefinition>();
+  #nextEntityId = 1;
+
+  constructor(protocol: ProtocolDefinition) {
+    this.#protocol = protocol;
+    for (const prefab of Object.values(protocol.prefabs)) {
+      this.#protocolPrefabs.add(prefab);
+    }
+  }
+
+  entity(): EntityRef {
+    const entityId = this.#allocateEntityId();
+    this.#storage.addEntity(entityId);
+    this.dirty.markCreated(entityId);
+    return this.#entityRef(entityId);
+  }
+
+  spawn(): EntityRef;
+  spawn<TFields extends FieldDefinitions>(
+    schema: EntitySchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityInstance<TFields>;
+  spawn<TFields extends FieldDefinitions>(
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityRef;
+  spawn<TComponents extends Record<string, ComponentSchema>>(
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): EntityRef;
+  spawn(
+    schemaOrPrefab?: EntitySchema | PrefabDefinition,
+    initial?: Record<string, unknown>,
+  ): EntityInstance<FieldDefinitions> | EntityRef {
+    if (schemaOrPrefab === undefined) {
+      return this.entity();
+    }
+
+    if (hasComponentList(schemaOrPrefab)) {
+      this.#assertPrefabInProtocol(schemaOrPrefab, "spawn");
+      this.#assertPrefabInitial(schemaOrPrefab, initial);
+      const entity = this.entity();
+      for (const [alias, component] of Object.entries(schemaOrPrefab.components)) {
+        const componentInitial =
+          initial?.[alias] ??
+          initial?.[component.name] ??
+          (schemaOrPrefab.component === component ? initial : undefined);
+        this.add(entity, component, componentInitial as Partial<FieldValues<FieldDefinitions>>);
+      }
+      return entity;
+    }
+
+    this.#assertComponentInProtocol(schemaOrPrefab, "spawn");
+    this.#assertComponentInitial(schemaOrPrefab, initial, "spawn");
+    const entity = this.entity();
+    return this.add(entity, schemaOrPrefab, initial as Partial<FieldValues<FieldDefinitions>>);
+  }
+
+  spawnAny(
+    schemaOrPrefab: EntitySchema | PrefabDefinition,
+    initial?: Record<string, unknown>,
+  ): EntityInstance<FieldDefinitions> | EntityRef {
+    return this.spawn(
+      schemaOrPrefab as EntitySchema<FieldDefinitions>,
+      initial as Partial<FieldValues<FieldDefinitions>>,
+    );
+  }
+
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    component: ComponentSchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | EntityRef,
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): PrefabInstance<TComponents>;
+  add(
+    entity: number | EntityRef,
+    componentOrPrefab: ComponentSchema | PrefabDefinition,
+    initial?: Record<string, unknown>,
+  ): ComponentInstance<FieldDefinitions> | PrefabInstance<Record<string, ComponentSchema>> {
+    if (hasComponentList(componentOrPrefab)) {
+      this.#assertPrefabInProtocol(componentOrPrefab, "add");
+      this.#assertPrefabInitial(componentOrPrefab, initial);
+      const entityId = entityIdFrom(entity, "world.add()");
+      this.#assertEntityExists(entityId, "world.add()");
+      for (const [alias, component] of Object.entries(componentOrPrefab.components)) {
+        const componentInitial =
+          initial?.[alias] ??
+          initial?.[component.name] ??
+          (componentOrPrefab.component === component ? initial : undefined);
+        this.#addComponent(entityId, component, componentInitial as Partial<FieldValues<FieldDefinitions>>);
+      }
+      if (componentOrPrefab.component !== undefined && componentOrPrefab.componentList.length === 1) {
+        return this.get(entityId, componentOrPrefab.component)!;
+      }
+      return this.getPrefab(entityId, componentOrPrefab)!;
+    }
+
+    return this.#addComponent(entity, componentOrPrefab, initial as Partial<FieldValues<FieldDefinitions>>);
+  }
+
+  #addComponent<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    component: ComponentSchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields> {
+    this.#assertComponentInProtocol(component, "add");
+    const entityId = entityIdFrom(entity, "world.add()");
+    this.#assertEntityExists(entityId, "world.add()");
+
+    const existing = this.get(entityId, component);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const record = this.#createRecord(component, entityId, initial);
+    this.#storage.set(entityId, component.schemaId, record as ComponentRecord);
+    this.dirty.markAdded(entityId, component.schemaId);
+    return record.instance;
+  }
+
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ComponentInstance<TFields> | undefined;
+  get(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
+  ): ComponentInstance<FieldDefinitions> | undefined {
+    const entityId = entityIdFrom(entity, "world.get()");
+    if (hasComponentList(componentOrPrefab)) {
+      this.#assertPrefabInProtocol(componentOrPrefab, "get");
+      const component = componentOrPrefab.component;
+      if (component === undefined) {
+        throw new Error(
+          `Prefab "${componentOrPrefab.name}" does not have a single primary component`,
+        );
+      }
+      this.#assertComponentInProtocol(component, "get");
+      const record = this.#storage.get(entityId, component.schemaId);
+      return record?.instance;
+    }
+    this.#assertComponentInProtocol(componentOrPrefab, "get");
+    const record = this.#storage.get(entityId, componentOrPrefab.schemaId);
+    return record?.instance;
+  }
+
+  getAny(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
+  ): ComponentInstance<FieldDefinitions> | undefined {
+    return this.get(entity, componentOrPrefab as ComponentSchema<FieldDefinitions>);
+  }
+
+  getReadonly<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
+  getReadonly(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
+  ): ReadonlyComponentInstance<FieldDefinitions> | undefined {
+    const instance = this.getAny(entity, componentOrPrefab);
+    return instance === undefined ? undefined : this.#readonlyComponent(instance);
+  }
+
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): PrefabInstance<TComponents> | undefined {
+    this.#assertPrefabInProtocol(prefab, "getPrefab");
+    const entityId = entityIdFrom(entity, "world.getPrefab()");
+    const result: Record<string, ComponentInstance<FieldDefinitions>> = {};
+    for (const [alias, component] of Object.entries(prefab.components)) {
+      const record = this.#storage.get(entityId, component.schemaId);
+      if (record === undefined) {
+        return undefined;
+      }
+      result[alias] = record.instance;
+    }
+    return Object.freeze(result) as PrefabInstance<TComponents>;
+  }
+
+  getPrefabReadonly<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): ReadonlyPrefabInstance<TComponents> | undefined {
+    this.#assertPrefabInProtocol(prefab, "getPrefab");
+    const entityId = entityIdFrom(entity, "world.getPrefab()");
+    const result: Record<string, ReadonlyComponentInstance<FieldDefinitions>> = {};
+    for (const [alias, component] of Object.entries(prefab.components)) {
+      const record = this.#storage.get(entityId, component.schemaId);
+      if (record === undefined) {
+        return undefined;
+      }
+      result[alias] = this.#readonlyComponent(record.instance);
+    }
+    return Object.freeze(result) as ReadonlyPrefabInstance<TComponents>;
+  }
+
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean {
+    const entityId = entityIdFrom(entity, "world.has()");
+    if (hasComponentList(componentOrPrefab)) {
+      this.#assertPrefabInProtocol(componentOrPrefab, "has");
+      return componentOrPrefab.componentList.every((component) =>
+        this.#storage.get(entityId, component.schemaId) !== undefined,
+      );
+    }
+    this.#assertComponentInProtocol(componentOrPrefab, "has");
+    return this.#storage.get(entityId, componentOrPrefab.schemaId) !== undefined;
+  }
+
+  remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
+    const entityId = entityIdFrom(entity, "world.remove()");
+    if (hasComponentList(componentOrPrefab)) {
+      this.#assertPrefabInProtocol(componentOrPrefab, "remove");
+      let removed = false;
+      for (const component of componentOrPrefab.componentList) {
+        if (this.#storage.remove(entityId, component.schemaId)) {
+          this.dirty.markRemoved(entityId, component.schemaId);
+          removed = true;
+        }
+      }
+      return removed;
+    }
+
+    this.#assertComponentInProtocol(componentOrPrefab, "remove");
+    if (!this.#storage.remove(entityId, componentOrPrefab.schemaId)) {
+      return false;
+    }
+
+    this.dirty.markRemoved(entityId, componentOrPrefab.schemaId);
+    return true;
+  }
+
+  destroy(entity: number | EntityRef): boolean {
+    const entityId = entityIdFrom(entity, "world.destroy()");
+    if (!this.#storage.deleteEntity(entityId)) {
+      return false;
+    }
+
+    this.#entityRefs.delete(entityId);
+    this.#readonlyEntityRefs.delete(entityId);
+    this.dirty.markDestroyed(entityId);
+    return true;
+  }
+
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents> {
+    this.#assertComponentsInProtocol(components, "query");
+    // QueryResult stays lazy; row materialization happens only when the caller iterates or maps it.
+    return new QueryResultImpl(this, components);
+  }
+
+  queryReadonly<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents, ReadonlyEntityRef, "readonly"> {
+    this.#assertComponentsInProtocol(components, "query");
+    return new QueryResultImpl(this.#readonlyQueryAccess(), components);
+  }
+
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents>,
+  ): void {
+    this.#assertComponentsInProtocol(components, "each");
+    assertEachCallback(fn);
+    const call = fn as (
+      entity: EntityRef,
+      ...components: ComponentInstance<FieldDefinitions>[]
+    ) => void;
+    const componentIds = components.map((component) => component.schemaId);
+    const arity = componentIds.length;
+    if (arity === 1) {
+      this.#storage.forEachRow(componentIds, (entityId, first) => {
+        call(this.#entityRef(entityId), first!.instance);
+      });
+      return;
+    }
+    if (arity === 2) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second) => {
+        call(this.#entityRef(entityId), first!.instance, second!.instance);
+      });
+      return;
+    }
+    if (arity === 3) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second, third) => {
+        call(this.#entityRef(entityId), first!.instance, second!.instance, third!.instance);
+      });
+      return;
+    }
+    if (arity === 4) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second, third, fourth) => {
+        call(
+          this.#entityRef(entityId),
+          first!.instance,
+          second!.instance,
+          third!.instance,
+          fourth!.instance,
+        );
+      });
+      return;
+    }
+
+    this.#storage.forEachRow(
+      componentIds,
+      (entityId, first, second, third, fourth, records) => {
+        call(this.#entityRef(entityId), ...records!.map((record) => record.instance));
+      },
+    );
+  }
+
+  eachReadonly<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
+  ): void {
+    this.#assertComponentsInProtocol(components, "each");
+    assertEachCallback(fn);
+    const call = fn as (
+      entity: ReadonlyEntityRef,
+      ...components: ReadonlyComponentInstance<FieldDefinitions>[]
+    ) => void;
+    const componentIds = components.map((component) => component.schemaId);
+    const arity = componentIds.length;
+    if (arity === 1) {
+      this.#storage.forEachRow(componentIds, (entityId, first) => {
+        call(this.#readonlyEntityRef(entityId), this.#readonlyComponent(first!.instance));
+      });
+      return;
+    }
+    if (arity === 2) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second) => {
+        call(
+          this.#readonlyEntityRef(entityId),
+          this.#readonlyComponent(first!.instance),
+          this.#readonlyComponent(second!.instance),
+        );
+      });
+      return;
+    }
+    if (arity === 3) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second, third) => {
+        call(
+          this.#readonlyEntityRef(entityId),
+          this.#readonlyComponent(first!.instance),
+          this.#readonlyComponent(second!.instance),
+          this.#readonlyComponent(third!.instance),
+        );
+      });
+      return;
+    }
+    if (arity === 4) {
+      this.#storage.forEachRow(componentIds, (entityId, first, second, third, fourth) => {
+        call(
+          this.#readonlyEntityRef(entityId),
+          this.#readonlyComponent(first!.instance),
+          this.#readonlyComponent(second!.instance),
+          this.#readonlyComponent(third!.instance),
+          this.#readonlyComponent(fourth!.instance),
+        );
+      });
+      return;
+    }
+
+    this.#storage.forEachRow(
+      componentIds,
+      (entityId, first, second, third, fourth, records) => {
+        call(
+          this.#readonlyEntityRef(entityId),
+          ...records!.map((record) => this.#readonlyComponent(record.instance)),
+        );
+      },
+    );
+  }
+
+  system<TWorld extends HostWorld | ClientWorld>(
+    name: string,
+    phase: SystemPhase,
+    fn: SystemFn<TWorld>,
+  ): () => void {
+    assertSystemRegistration(name, phase, fn);
+    const systems = this.#systems.get(phase) ?? [];
+    if (systems.some((system) => system.name === name)) {
+      throw new Error(`world.system() already has a system named "${name}" in phase "${phase}"`);
+    }
+    const entry = { name, fn: fn as SystemFn };
+    systems.push(entry);
+    this.#systems.set(phase, systems);
+    return () => {
+      const current = this.#systems.get(phase) ?? [];
+      this.#systems.set(
+        phase,
+        current.filter((item) => item !== entry),
+      );
+    };
+  }
+
+  runSystems(owner: HostWorld | ClientWorld, phase: SystemPhase, context?: SystemContext): void {
+    const sourceContext = context ?? { phase, tick: 0, dtMs: 0, nowMs: 0 };
+    const systemContext = Object.isFrozen(sourceContext) ? sourceContext : Object.freeze(sourceContext);
+    // Systems use a registration snapshot so systems added mid-phase start on the next tick.
+    for (const system of [...(this.#systems.get(phase) ?? [])]) {
+      system.fn(owner, systemContext);
+    }
+  }
+
+  tick(owner: HostWorld | ClientWorld): void {
+    this.runSystems(owner, "preUpdate");
+    this.runSystems(owner, "update");
+    this.runSystems(owner, "postUpdate");
+    this.runSystems(owner, "network");
+  }
+
+  clearDirty(): void {
+    this.dirty.clear();
+  }
+
+  _getRecord(entityId: number, componentId?: number): ComponentRecord | undefined {
+    if (componentId !== undefined) {
+      return this.#storage.get(entityId, componentId);
+    }
+    return this.#storage.first(entityId);
+  }
+
+  _getRecords(): readonly ComponentRecord[] {
+    return this.#storage.records();
+  }
+
+  _getEntityIds(): readonly number[] {
+    return this.#storage.entityIds();
+  }
+
+  _queryRows(components: readonly ComponentSchema[]) {
+    return this.#storage.queryRows(components.map((component) => component.schemaId));
+  }
+
+  _queryCount(components: readonly ComponentSchema[]): number {
+    return this.#storage.countRows(components.map((component) => component.schemaId));
+  }
+
+  _getDirtySnapshot() {
+    return this.dirty.collectOps();
+  }
+
+  _clearWrittenDirty(ops: ReturnType<DirtyGraph["collectOps"]>): void {
+    this.dirty.clearWritten(ops);
+  }
+
+  _getDirtyMask(entityId: number, componentId?: number): number {
+    return this.dirty.maskOf(entityId, componentId);
+  }
+
+  _entityRef(entityId: number): EntityRef {
+    return this.#entityRef(entityId);
+  }
+
+  _readonlyEntityRef(entityId: number): ReadonlyEntityRef {
+    return this.#readonlyEntityRef(entityId);
+  }
+
+  _spawnRemote<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+    entityId: number,
+  ): ComponentInstance<TFields> {
+    this.#assertComponentInProtocol(component, "apply remote snapshot");
+    assertEntityId(entityId, "remote snapshot");
+    this.#ensureEntity(entityId, false);
+    const existing = this.get(entityId, component);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const record = this.#createRecord(component, entityId);
+    this.#storage.set(entityId, component.schemaId, record as ComponentRecord);
+    this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
+    return record.instance;
+  }
+
+  _applyCreateEntityFromRemote(entityId: number): void {
+    assertEntityId(entityId, "remote snapshot");
+    this.#ensureEntity(entityId, false);
+    this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
+  }
+
+  _applyRemoveFromRemote(entityId: number, componentId: number): void {
+    assertEntityId(entityId, "remote snapshot");
+    this.#storage.remove(entityId, componentId);
+  }
+
+  _applyDestroyFromRemote(entityId: number, _schemaId?: number): void {
+    assertEntityId(entityId, "remote snapshot");
+    this.#storage.deleteEntity(entityId);
+    this.#entityRefs.delete(entityId);
+    this.#readonlyEntityRefs.delete(entityId);
+  }
+
+  #allocateEntityId(): number {
+    const entityId = this.#nextEntityId;
+    this.#nextEntityId += 1;
+    return entityId;
+  }
+
+  #ensureEntity(entityId: number, markDirty = true): void {
+    assertEntityId(entityId, "world entity");
+    if (this.#storage.hasEntity(entityId)) {
+      return;
+    }
+    this.#storage.addEntity(entityId);
+    this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
+    if (markDirty) {
+      this.dirty.markCreated(entityId);
+    }
+  }
+
+  #assertEntityExists(entityId: number, label: string): void {
+    if (!this.#storage.hasEntity(entityId)) {
+      throw new Error(`${label} requires an existing entity; create it with spawn() first`);
+    }
+  }
+
+  #entityRef(entityId: number): EntityRef {
+    const existing = this.#entityRefs.get(entityId);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const ref = Object.freeze({ id: entityId }) as EntityRef;
+    this.#entityRefs.set(entityId, ref);
+    return ref;
+  }
+
+  #readonlyEntityRef(entityId: number): ReadonlyEntityRef {
+    const existing = this.#readonlyEntityRefs.get(entityId);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const ref = Object.freeze({ id: entityId }) as ReadonlyEntityRef;
+    this.#readonlyEntityRefs.set(entityId, ref);
+    return ref;
+  }
+
+  #readonlyQueryAccess(): QueryWorldAccess<ReadonlyEntityRef, "readonly"> {
+    return {
+      _queryRows: (components) => this._queryRows(components),
+      _queryCount: (components) => this._queryCount(components),
+      _entityRef: (entityId) => this.#readonlyEntityRef(entityId),
+      _component: (record) => this.#readonlyComponent(record.instance),
+    };
+  }
+
+  #readonlyComponent<TFields extends FieldDefinitions>(
+    instance: ComponentInstance<TFields>,
+  ): ReadonlyComponentInstance<TFields> {
+    const existing = this.#readonlyComponents.get(instance as ComponentInstance<FieldDefinitions>);
+    if (existing !== undefined) {
+      return existing as ReadonlyComponentInstance<TFields>;
+    }
+
+    const readonlyInstance: Record<string, unknown> = {
+      entityId: instance.entityId,
+      id: instance.id,
+      schema: instance.schema,
+    };
+    for (const field of fieldsForSchema(instance.schema)) {
+      const fieldName = field.fieldName as keyof TFields & string;
+      readonlyInstance[fieldName] = readonlyNetRef(
+        instance[fieldName] as NetRef<FieldValue<TFields[keyof TFields]>>,
+      );
+    }
+
+    const frozen = Object.freeze(readonlyInstance) as ReadonlyComponentInstance<TFields>;
+    this.#readonlyComponents.set(
+      instance as ComponentInstance<FieldDefinitions>,
+      frozen as ReadonlyComponentInstance<FieldDefinitions>,
+    );
+    return frozen;
+  }
+
+  #createRecord<TFields extends FieldDefinitions>(
+    schema: ComponentSchema<TFields>,
+    entityId: number,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentRecord<TFields> {
+    this.#assertComponentInitial(schema, initial, "initialize");
+    const instance: Record<string, unknown> = {
+      entityId,
+      id: entityId,
+      schema,
+    };
+
+    for (const field of fieldsForSchema(schema)) {
+      const fieldName = field.fieldName as keyof TFields & string;
+      const initialValue =
+        initial !== undefined && fieldName in initial
+          ? initial[fieldName as keyof FieldValues<TFields>]
+          : field.defaultValue;
+      const meta = this.#createFieldMeta(schema, entityId, field);
+      instance[fieldName] = new NetRefImpl(meta, initialValue, (dirtyMeta) => {
+        this.dirty.markUpdated(dirtyMeta.entityId, dirtyMeta.schemaId, dirtyMeta.fieldId);
+      });
+    }
+
+    return {
+      entityId,
+      schema,
+      instance: Object.freeze(instance) as ComponentInstance<TFields>,
+    };
+  }
+
+  #assertPrefabInitial(prefab: PrefabDefinition, initial: Record<string, unknown> | undefined): void {
+    if (initial === undefined) {
+      return;
+    }
+    this.#assertInitialObject(`Prefab "${prefab.name}" initial`, initial);
+    const aliases = new Set(Object.keys(prefab.components));
+    const componentNames = new Set(prefab.componentList.map((component) => component.name));
+    const primary = prefab.component;
+    const primaryFields = primary === undefined
+      ? new Set<string>()
+      : new Set(fieldsForSchema(primary).map((field) => field.fieldName));
+    const usesComponentContainer = Object.keys(initial).some(
+      (key) => aliases.has(key) || componentNames.has(key),
+    );
+
+    for (const key of Object.keys(initial)) {
+      if (aliases.has(key) || componentNames.has(key)) {
+        const component = (prefab.components as Record<string, ComponentSchema>)[key] ??
+          prefab.componentList.find((item) => item.name === key);
+        this.#assertInitialObject(
+          `Prefab "${prefab.name}" initial "${key}"`,
+          initial[key],
+        );
+        if (component !== undefined) {
+          this.#assertComponentInitial(
+            component,
+            initial[key] as Partial<FieldValues<FieldDefinitions>>,
+            "initialize",
+          );
+        }
+        continue;
+      }
+      if (primaryFields.has(key)) {
+        if (usesComponentContainer) {
+          throw new Error(
+            `Prefab "${prefab.name}" initial cannot mix component aliases with primary component field "${key}"`,
+          );
+        }
+        continue;
+      }
+      throw new Error(`Prefab "${prefab.name}" initial has unknown key "${key}"`);
+    }
+  }
+
+  #assertComponentInitial(
+    schema: ComponentSchema,
+    initial: Partial<FieldValues<FieldDefinitions>> | undefined,
+    operation: string,
+  ): void {
+    if (initial === undefined) {
+      return;
+    }
+    this.#assertInitialObject(`Component "${schema.name}" initial`, initial);
+    const fields = new Set(fieldsForSchema(schema).map((field) => field.fieldName));
+    for (const key of Object.keys(initial)) {
+      if (!fields.has(key)) {
+        throw new Error(`Cannot ${operation} component "${schema.name}" with unknown field "${key}"`);
+      }
+    }
+  }
+
+  #assertInitialObject(label: string, value: unknown): asserts value is Record<string, unknown> {
+    assertPlainObjectMap(label, value);
+  }
+
+  #createFieldMeta<T>(
+    schema: ComponentSchema,
+    entityId: number,
+    field: InternalSchemaField<T>,
+  ): InternalFieldMeta<T> {
+    const meta = {
+      entityId,
+      schemaId: schema.schemaId,
+      schemaName: schema.name,
+      fieldId: field.fieldId,
+      fieldName: field.fieldName,
+      dirtyBit: field.dirtyBit,
+      codec: field.codec,
+      defaultValue: field.defaultValue,
+    };
+
+    return field.metadata === undefined ? meta : { ...meta, metadata: field.metadata };
+  }
+
+  #assertPrefabInProtocol(prefab: PrefabDefinition<any>, operation: string): void {
+    assertPrefabDefinition(prefab, operation);
+    if (this.#knownProtocolPrefabs.has(prefab)) {
+      return;
+    }
+
+    if (!this.#protocolPrefabs.has(prefab)) {
+      throw new Error(
+        `Cannot ${operation} prefab "${prefab.name}" because it is not registered in this world protocol`,
+      );
+    }
+
+    this.#knownProtocolPrefabs.add(prefab);
+    for (const component of prefab.componentList) {
+      this.#assertComponentInProtocol(component, operation);
+    }
+  }
+
+  #assertComponentsInProtocol(components: readonly unknown[], operation: string): void {
+    if (!Array.isArray(components)) {
+      throw new Error(`world.${operation}() requires a component array`);
+    }
+    if (components.length === 0) {
+      throw new Error(`world.${operation}() requires at least one component`);
+    }
+    const seenComponentIds = new Set<number>();
+    for (const component of components) {
+      this.#assertComponentInProtocol(component, operation);
+      if (seenComponentIds.has(component.schemaId)) {
+        throw new Error(`world.${operation}() cannot include duplicate component "${component.name}"`);
+      }
+      seenComponentIds.add(component.schemaId);
+    }
+  }
+
+  #assertComponentInProtocol(component: unknown, operation: string): asserts component is ComponentSchema {
+    assertComponentSchema(component, operation);
+    if (this.#knownProtocolComponents.has(component)) {
+      return;
+    }
+
+    if (registryForProtocol(this.#protocol).getSchema(component.schemaId) === component) {
+      this.#knownProtocolComponents.add(component);
+      return;
+    }
+
+    throw new Error(
+      `Cannot ${operation} component "${component.name}" because it is not registered in this world protocol`,
+    );
+  }
+}
+
+function hasComponentList(value: unknown): value is PrefabDefinition {
+  return value !== null && typeof value === "object" && "componentList" in value;
+}
+
+function assertPrefabDefinition(value: unknown, operation: string): asserts value is PrefabDefinition {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    (value as { readonly kind?: unknown }).kind !== "prefab" ||
+    typeof (value as { readonly name?: unknown }).name !== "string" ||
+    !Array.isArray((value as { readonly componentList?: unknown }).componentList) ||
+    typeof (value as { readonly components?: unknown }).components !== "object" ||
+    (value as { readonly components?: unknown }).components === null
+  ) {
+    throw new Error(`Cannot ${operation}: expected a prefab from defineEntity()`);
+  }
+}
+
+function assertComponentSchema(
+  value: unknown,
+  operation: string,
+): asserts value is ComponentSchema {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    (value as { readonly kind?: unknown }).kind !== "component" ||
+    typeof (value as { readonly name?: unknown }).name !== "string" ||
+    !Number.isSafeInteger((value as { readonly schemaId?: unknown }).schemaId) ||
+    typeof (value as { readonly fields?: unknown }).fields !== "object" ||
+    (value as { readonly fields?: unknown }).fields === null ||
+    !Array.isArray((value as { readonly fieldList?: unknown }).fieldList)
+  ) {
+    throw new Error(`Cannot ${operation}: expected a component from defineComponent()`);
+  }
+}
+
+function readonlyNetRef<T>(source: NetRef<T>): ReadonlyNetRef<T> {
+  return Object.freeze({
+    get value() {
+      return source.value;
+    },
+    set value(_value: T) {
+      throw new Error(
+        `Cannot mutate read-only replicated field "${source.meta.schemaName}.${source.meta.fieldName}". Send a command to the host or mutate state from a HostWorld.`,
+      );
+    },
+    meta: source.meta,
+    peek: () => source.peek(),
+  });
+}
+
+class QueuedClientTransport implements ClientTransport {
+  readonly #queue: { channel: ChannelName; bytes: Uint8Array }[] = [];
+  #handler?: (channel: ChannelName, bytes: Uint8Array) => void;
+
+  constructor(private readonly inner: ClientTransport) {
+    inner.onPacket((channel, bytes) => {
+      assertChannelName(channel, "ClientTransport.onPacket()");
+      assertPacketBytes(bytes, "ClientTransport.onPacket()");
+      this.#queue.push({ channel, bytes: copyPacketBytes(bytes) });
+    });
+  }
+
+  send(channel: ChannelName, bytes: Uint8Array): void {
+    assertChannelName(channel, "ClientTransport.send()");
+    assertPacketBytes(bytes, "ClientTransport.send()");
+    this.inner.send(channel, bytes);
+  }
+
+  onPacket(cb: (channel: ChannelName, bytes: Uint8Array) => void): void {
+    this.#handler = cb;
+  }
+
+  drain(): void {
+    const packets = this.#queue.splice(0);
+    for (const packet of packets) {
+      this.#handler?.(packet.channel, packet.bytes);
+    }
+  }
+}
+
+class QueuedHostTransport implements HostTransport {
+  readonly #queue: { peer: PeerRef; channel: ChannelName; bytes: Uint8Array }[] = [];
+  #handler?: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void;
+
+  constructor(private readonly inner: HostTransport) {
+    inner.onPacket((peer, channel, bytes) => {
+      assertPeerRef(peer, "HostTransport.onPacket()");
+      assertChannelName(channel, "HostTransport.onPacket()");
+      assertPacketBytes(bytes, "HostTransport.onPacket()");
+      this.#queue.push({ peer, channel, bytes: copyPacketBytes(bytes) });
+    });
+  }
+
+  send(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void {
+    assertPeerRef(peer, "HostTransport.send()");
+    assertChannelName(channel, "HostTransport.send()");
+    assertPacketBytes(bytes, "HostTransport.send()");
+    this.inner.send(peer, channel, bytes);
+  }
+
+  broadcast(channel: ChannelName, bytes: Uint8Array): void {
+    assertChannelName(channel, "HostTransport.broadcast()");
+    assertPacketBytes(bytes, "HostTransport.broadcast()");
+    this.inner.broadcast(channel, bytes);
+  }
+
+  onPacket(cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void {
+    this.#handler = cb;
+  }
+
+  peers(): Iterable<PeerRef> {
+    const peers = this.inner.peers?.();
+    if (peers === undefined) {
+      return [];
+    }
+    if (peers === null || typeof peers !== "object" || !(Symbol.iterator in peers)) {
+      throw new Error("HostTransport.peers() must return an iterable of peer refs");
+    }
+    return Array.from(peers, (peer) => {
+      assertPeerRef(peer, "HostTransport.peers()");
+      return peer;
+    });
+  }
+
+  drain(): void {
+    const packets = this.#queue.splice(0);
+    for (const packet of packets) {
+      this.#handler?.(packet.peer, packet.channel, packet.bytes);
+    }
+  }
+}
+
+/** Authoritative world handle. Hosts create entities, mutate components, receive commands, and send snapshots. */
+export interface HostWorld {
+  /** Creates an empty host-authored entity. */
+  spawn(): EntityRef;
+  /** Creates an entity with one component schema attached and returns that component instance. */
+  spawn<TFields extends FieldDefinitions>(
+    schema: EntitySchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityInstance<TFields>;
+  spawn<TFields extends FieldDefinitions>(
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityRef;
+  spawn<TComponents extends Record<string, ComponentSchema>>(
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): EntityRef;
+  /** Adds a component or prefab to an existing host entity. Re-adding an existing component returns it. */
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    component: ComponentSchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | EntityRef,
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): PrefabInstance<TComponents>;
+  /** Reads a component or simple prefab primary component from an entity. */
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ComponentInstance<TFields> | undefined;
+  /** Reads every component in a composite prefab, or `undefined` if any component is missing. */
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): PrefabInstance<TComponents> | undefined;
+  /** Returns whether an entity currently has a component or every component in a prefab. */
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean;
+  /** Removes a component or every component in a prefab from an entity. */
+  remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean;
+  /** Destroys an entity and all component rows attached to it. */
+  destroy(entity: number | EntityRef): boolean;
+  /** Creates a lazy query over one or more components. */
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents>;
+  /** Iterates matching rows without materializing public query tuples. Prefer this in hot systems. */
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents>,
+  ): void;
+  /** Registers a named system in a phase. The returned function unregisters it. */
+  system(name: string, phase: SystemPhase, fn: SystemFn<HostWorld>): () => void;
+  /** Advances transport input, systems, and host snapshot output once. */
+  tick(): void;
+  /** Handles a client-to-host command. */
+  on<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    handler: RpcHandler<TFields>,
+  ): () => void;
+  /** Broadcasts a host-to-client event. */
+  broadcast<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Sends a full snapshot to one peer or all known peers. */
+  sendFullSnapshot(peer?: PeerRef): void;
+  /** Sets a manual per-peer visibility override for one entity. */
+  setVisible(peer: PeerRef, entity: number | ReadonlyEntityRef, visible: boolean): void;
+  /** Clears one visibility override, or all overrides for a peer when no entity is passed. */
+  clearVisible(peer: PeerRef, entity?: number | ReadonlyEntityRef): void;
+  /** Evaluates the current visibility policy for a peer/entity pair. */
+  isVisible(peer: PeerRef, entity: number | ReadonlyEntityRef): boolean;
+}
+
+class HostWorldImpl implements HostWorld {
+  readonly #core: WorldCore;
+  readonly #transport: QueuedHostTransport;
+  readonly #runtime: SyncHost;
+  readonly #clock: Clock;
+  readonly #protocol: ProtocolDefinition;
+  readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
+  readonly #visibility = new Map<PeerRef, Map<number, boolean>>();
+  readonly #visibilityDefault: "all" | "none";
+  readonly #interestWorld: InterestWorld;
+  #interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
+  #started = false;
+  #lastNowMs: number | undefined;
+  #systemTick = 0;
+
+  constructor(options: HostWorldOptions) {
+    assertHostWorldOptions(options);
+    const clock = checkedClock("createHostWorld()", options.clock);
+    this.#core = new WorldCore(options.protocol);
+    registerWorldInternals(this, createWorldInternals(this.#core));
+    this.#protocol = options.protocol;
+    this.#clock = clock;
+    this.#transport = new QueuedHostTransport(options.transport);
+    this.#visibilityDefault = options.visibility ?? "all";
+    this.#interestWorld = this.#createInterestWorld();
+    if (options.interest !== undefined) {
+      this.#interest = options.interest;
+    }
+    this.#runtime = createSyncHost(
+      hostRuntimeOptions(this, this.#transport, options, clock, () => this.#canReusePeerSnapshots()),
+    );
+    Object.freeze(this);
+  }
+
+  spawn(): EntityRef;
+  spawn<TFields extends FieldDefinitions>(
+    schema: EntitySchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityInstance<TFields>;
+  spawn<TFields extends FieldDefinitions>(
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): EntityRef;
+  spawn<TComponents extends Record<string, ComponentSchema>>(
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): EntityRef;
+  spawn(
+    schemaOrPrefab?: EntitySchema | PrefabDefinition,
+    initial?: Record<string, unknown>,
+  ): EntityInstance<FieldDefinitions> | EntityRef {
+    if (schemaOrPrefab === undefined) {
+      return this.#core.entity();
+    }
+    return this.#core.spawnAny(schemaOrPrefab, initial);
+  }
+
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    component: ComponentSchema<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TFields extends FieldDefinitions>(
+    entity: number | EntityRef,
+    prefab: SimpleEntityDefinition<TFields>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | EntityRef,
+    prefab: PrefabDefinition<TComponents>,
+    initial?: Partial<{
+      [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
+        ? Partial<FieldValues<TFields>>
+        : never;
+    }>,
+  ): PrefabInstance<TComponents>;
+  add(
+    entity: number | EntityRef,
+    componentOrPrefab: ComponentSchema | PrefabDefinition,
+    initial?: Record<string, unknown>,
+  ): ComponentInstance<FieldDefinitions> | PrefabInstance<Record<string, ComponentSchema>> {
+    if (hasComponentList(componentOrPrefab)) {
+      return this.#core.add(
+        entity,
+        componentOrPrefab,
+        initial as Partial<Record<string, Partial<FieldValues<FieldDefinitions>>>> | undefined,
+      );
+    }
+    return this.#core.add(entity, componentOrPrefab, initial as Partial<FieldValues<FieldDefinitions>>);
+  }
+
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ComponentInstance<TFields> | undefined;
+  get(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
+  ): ComponentInstance<FieldDefinitions> | undefined {
+    return this.#core.getAny(entity, componentOrPrefab);
+  }
+
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): PrefabInstance<TComponents> | undefined {
+    return this.#core.getPrefab(entity, prefab);
+  }
+
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean {
+    return this.#core.has(entity, componentOrPrefab);
+  }
+
+  remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
+    return this.#core.remove(entity, componentOrPrefab);
+  }
+
+  destroy(entity: number | EntityRef): boolean {
+    return this.#core.destroy(entity);
+  }
+
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents> {
+    return this.#core.query(...components);
+  }
+
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents>,
+  ): void {
+    this.#core.each(components, fn);
+  }
+
+  system(name: string, phase: SystemPhase, fn: SystemFn<HostWorld>): () => void {
+    return this.#core.system(name, phase, fn);
+  }
+
+  tick(): void {
+    if (!this.#started) {
+      this.#runtime.start();
+      this.#started = true;
+    }
+    const frame = this.#frameContext();
+    this.#transport.drain();
+    this.#runTimedSystems("preUpdate", frame);
+    this.#runTimedSystems("update", frame);
+    this.#runTimedSystems("postUpdate", frame);
+    this.#runTimedSystems("network", frame);
+    this.#runtime.update();
+  }
+
+  on<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    handler: RpcHandler<TFields>,
+  ): () => void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "HostWorld.on");
+    return this.#runtime.on(rpc, handler);
+  }
+
+  broadcast<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "HostWorld.broadcast");
+    this.#runtime.broadcast(rpc, payload);
+  }
+
+  sendFullSnapshot(peer?: PeerRef): void {
+    if (peer !== undefined) {
+      assertPeerRef(peer, "HostWorld.sendFullSnapshot()");
+    }
+    this.#runtime.sendFullSnapshot(peer);
+  }
+
+  setVisible(peer: PeerRef, entity: number | ReadonlyEntityRef, visible: boolean): void {
+    assertPeerRef(peer, "HostWorld.setVisible()");
+    const entityId = entityIdFrom(entity, "HostWorld.setVisible()");
+    if (typeof visible !== "boolean") {
+      throw new Error("HostWorld.setVisible() visible must be a boolean");
+    }
+    const map = this.#visibility.get(peer) ?? new Map<number, boolean>();
+    map.set(entityId, visible);
+    this.#visibility.set(peer, map);
+  }
+
+  clearVisible(peer: PeerRef, entity?: number | ReadonlyEntityRef): void {
+    assertPeerRef(peer, "HostWorld.clearVisible()");
+    if (entity === undefined) {
+      this.#visibility.delete(peer);
+      return;
+    }
+
+    const entityId = entityIdFrom(entity, "HostWorld.clearVisible()");
+    const map = this.#visibility.get(peer);
+    if (map === undefined) {
+      return;
+    }
+    map.delete(entityId);
+    if (map.size === 0) {
+      this.#visibility.delete(peer);
+    }
+  }
+
+  isVisible(peer: PeerRef, entity: number | ReadonlyEntityRef): boolean {
+    assertPeerRef(peer, "HostWorld.isVisible()");
+    const entityId = entityIdFrom(entity, "HostWorld.isVisible()");
+    const override = this.#visibility.get(peer)?.get(entityId);
+    if (override !== undefined) {
+      return override;
+    }
+    if (this.#interest !== undefined) {
+      const visible = this.#interest(peer, this.#core._readonlyEntityRef(entityId), this.#interestWorld);
+      if (typeof visible !== "boolean") {
+        throw new Error("createHostWorld() interest must return a boolean");
+      }
+      return visible;
+    }
+    return this.#visibilityDefault === "all";
+  }
+
+  #canReusePeerSnapshots(): boolean {
+    return (
+      this.#visibilityDefault === "all" &&
+      this.#interest === undefined &&
+      this.#visibility.size === 0
+    );
+  }
+
+  #runTimedSystems(phase: SystemPhase, frame: FrameContext): void {
+    this.#core.runSystems(this, phase, { ...frame, phase });
+  }
+
+  #frameContext(): FrameContext {
+    const nowMs = this.#clock.nowMs();
+    assertMonotonicNowMs("createHostWorld()", this.#lastNowMs, nowMs);
+    const dtMs = this.#lastNowMs === undefined ? 0 : nowMs - this.#lastNowMs;
+    this.#lastNowMs = nowMs;
+    this.#systemTick += 1;
+    return { tick: this.#systemTick, dtMs, nowMs };
+  }
+
+  #createInterestWorld(): InterestWorld {
+    return Object.freeze({
+      get: (entity, componentOrPrefab) => this.#core.getReadonly(entity, componentOrPrefab),
+      getPrefab: (entity, prefab) => this.#core.getPrefabReadonly(entity, prefab),
+      has: (entity, componentOrPrefab) => this.#core.has(entity, componentOrPrefab),
+      query: (...components) => this.#core.queryReadonly(...components),
+      each: (components, fn) => this.#core.eachReadonly(components, fn),
+    } satisfies InterestWorld);
+  }
+}
+
+/** Replicated client world handle. Clients read state, run client systems, send commands, and receive events. */
+export interface ClientWorld {
+  /** Reads a replicated component or simple prefab primary component. */
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
+  /** Reads every component in a composite prefab as read-only replicated state. */
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): ReadonlyPrefabInstance<TComponents> | undefined;
+  /** Returns whether a replicated entity currently has a component or prefab. */
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean;
+  /** Creates a lazy read-only query over one or more components. */
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents, ReadonlyEntityRef, "readonly">;
+  /** Iterates matching read-only rows without materializing public query tuples. */
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
+  ): void;
+  /** Registers a named client-side system. The returned function unregisters it. */
+  system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void;
+  /** Advances transport input and client systems once. */
+  tick(): void;
+  /** Sends a client-to-host command. */
+  send<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Handles a host-to-client event. */
+  on<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    handler: RpcHandler<TFields>,
+  ): () => void;
+  /** Registers a post-apply snapshot callback. The returned function unregisters it. */
+  onSnapshot(handler: SnapshotHandler<ClientWorld>): () => void;
+  /** Requests a reliable full snapshot from the host. */
+  requestFullSnapshot(): void;
+}
+
+class ClientWorldImpl implements ClientWorld {
+  readonly #core: WorldCore;
+  readonly #transport: QueuedClientTransport;
+  readonly #runtime: SyncClient;
+  readonly #clock: Clock;
+  readonly #logger: Logger | undefined;
+  readonly #protocol: ProtocolDefinition;
+  readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
+  readonly #snapshotHandlers = new Set<SnapshotHandler<ClientWorld>>();
+  #started = false;
+  #lastNowMs: number | undefined;
+  #systemTick = 0;
+
+  constructor(options: ClientWorldOptions) {
+    assertClientWorldOptions(options);
+    const clock = checkedClock("createClientWorld()", options.clock);
+    this.#core = new WorldCore(options.protocol);
+    registerWorldInternals(this, createWorldInternals(this.#core));
+    this.#protocol = options.protocol;
+    this.#clock = clock;
+    this.#logger = options.logger;
+    this.#transport = new QueuedClientTransport(options.transport);
+    this.#runtime = createSyncClient(
+      clientRuntimeOptions(this, this.#transport, options, clock, (context) =>
+        this.#notifySnapshot(context),
+      ),
+    );
+    Object.freeze(this);
+  }
+
+  get<TFields extends FieldDefinitions>(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
+  get(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
+  ): ReadonlyComponentInstance<FieldDefinitions> | undefined {
+    return this.#core.getReadonly(
+      entity,
+      componentOrPrefab,
+    );
+  }
+
+  getPrefab<TComponents extends Record<string, ComponentSchema>>(
+    entity: number | ReadonlyEntityRef,
+    prefab: PrefabDefinition<TComponents>,
+  ): ReadonlyPrefabInstance<TComponents> | undefined {
+    return this.#core.getPrefabReadonly(entity, prefab);
+  }
+
+  has(
+    entity: number | ReadonlyEntityRef,
+    componentOrPrefab: ComponentOrPrefab,
+  ): boolean {
+    return this.#core.has(entity, componentOrPrefab);
+  }
+
+  query<TComponents extends ComponentQuery>(
+    ...components: TComponents
+  ): QueryResult<TComponents, ReadonlyEntityRef, "readonly"> {
+    return this.#core.queryReadonly(...components);
+  }
+
+  each<const TComponents extends ComponentQuery>(
+    components: TComponents,
+    fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
+  ): void {
+    this.#core.eachReadonly(components, fn);
+  }
+
+  system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void {
+    return this.#core.system(name, phase, fn);
+  }
+
+  tick(): void {
+    if (!this.#started) {
+      this.#runtime.start();
+      this.#started = true;
+    }
+    const frame = this.#frameContext();
+    this.#transport.drain();
+    this.#runTimedSystems("preUpdate", frame);
+    this.#runTimedSystems("update", frame);
+    this.#runTimedSystems("postUpdate", frame);
+  }
+
+  send<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ClientWorld.send");
+    this.#runtime.send(rpc, payload);
+  }
+
+  on<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    handler: RpcHandler<TFields>,
+  ): () => void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ClientWorld.on");
+    return this.#runtime.on(rpc, handler);
+  }
+
+  onSnapshot(handler: SnapshotHandler<ClientWorld>): () => void {
+    if (!isFunction(handler)) {
+      throw new Error("ClientWorld.onSnapshot() requires a function");
+    }
+    this.#snapshotHandlers.add(handler);
+    return () => {
+      this.#snapshotHandlers.delete(handler);
+    };
+  }
+
+  requestFullSnapshot(): void {
+    this.#runtime.requestFullSnapshot();
+  }
+
+  #notifySnapshot(context: SnapshotContext): void {
+    const frozenContext = Object.isFrozen(context) ? context : Object.freeze(context);
+    // Snapshot hooks mirror RPC dispatch semantics: isolated errors and stable handler membership.
+    for (const handler of [...this.#snapshotHandlers]) {
+      try {
+        handler(this, frozenContext);
+      } catch (error) {
+        this.#logger?.error?.("ClientWorld snapshot handler failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  #runTimedSystems(phase: SystemPhase, frame: FrameContext): void {
+    this.#core.runSystems(this, phase, { ...frame, phase });
+  }
+
+  #frameContext(): FrameContext {
+    const nowMs = this.#clock.nowMs();
+    assertMonotonicNowMs("createClientWorld()", this.#lastNowMs, nowMs);
+    const dtMs = this.#lastNowMs === undefined ? 0 : nowMs - this.#lastNowMs;
+    this.#lastNowMs = nowMs;
+    this.#systemTick += 1;
+    return { tick: this.#systemTick, dtMs, nowMs };
+  }
+}
+
+/** Creates an authoritative host world. There is no public local-only world factory. */
+export function createHostWorld(options: HostWorldOptions): HostWorld {
+  return new HostWorldImpl(options);
+}
+
+/** Creates a replicated client world. Client replicated state is read-only and driven by snapshots. */
+export function createClientWorld(options: ClientWorldOptions): ClientWorld {
+  return new ClientWorldImpl(options);
+}
+
+function hostRuntimeOptions(
+  world: HostWorld,
+  transport: QueuedHostTransport,
+  options: HostWorldOptions,
+  clock: Clock,
+  canReusePeerSnapshots: () => boolean,
+): SyncHostOptions {
+  const extra: { logger?: Logger } = {};
+  if (options.logger !== undefined) {
+    extra.logger = options.logger;
+  }
+
+  return {
+    world,
+    transport,
+    clock,
+    registry: registryFromOptions(options),
+    isVisible: (peer, entityId) => world.isVisible(peer, entityId),
+    canReusePeerSnapshots,
+    ...extra,
+  };
+}
+
+function clientRuntimeOptions(
+  world: ClientWorld,
+  transport: QueuedClientTransport,
+  options: ClientWorldOptions,
+  clock: Clock,
+  onSnapshot: (context: SnapshotContext) => void,
+): SyncRuntimeOptions {
+  const extra: { logger?: Logger } = {};
+  if (options.logger !== undefined) {
+    extra.logger = options.logger;
+  }
+
+  return {
+    world,
+    transport,
+    clock,
+    registry: registryFromOptions(options),
+    onSnapshot,
+    ...extra,
+  };
+}
+
+function registryFromOptions(options: {
+  readonly protocol: ProtocolDefinition;
+}) {
+  return registryForProtocol(options.protocol);
+}
+
+type ExpectedRpcKind = "command" | "event";
+
+function assertProtocolRpc(
+  protocol: ProtocolDefinition,
+  knownRpcs: WeakSet<RpcDefinition>,
+  rpc: unknown,
+  expectedKind: ExpectedRpcKind,
+  operation: string,
+): asserts rpc is RpcDefinition {
+  if (!isRpcDefinition(rpc)) {
+    throw new Error(`${operation}() requires ${rpcKindArticle(expectedKind)} from defineProtocol()`);
+  }
+
+  if (rpc.kind !== expectedKind) {
+    throw new Error(
+      `${operation}() expects ${rpcKindArticle(expectedKind)}; received ${rpc.kind} "${rpc.name}"`,
+    );
+  }
+
+  if (knownRpcs.has(rpc)) {
+    return;
+  }
+
+  if (registryForProtocol(protocol).getRpc(rpc.rpcId) === rpc) {
+    knownRpcs.add(rpc);
+    return;
+  }
+
+  throw new Error(
+    `${operation}() cannot use RPC "${rpc.name}" because it is not registered in this world protocol`,
+  );
+}
+
+function isRpcDefinition(value: unknown): value is RpcDefinition {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { readonly name?: unknown }).name === "string" &&
+    typeof (value as { readonly rpcId?: unknown }).rpcId === "number" &&
+    ((value as { readonly kind?: unknown }).kind === "command" ||
+      (value as { readonly kind?: unknown }).kind === "event")
+  );
+}
+
+function rpcKindArticle(kind: ExpectedRpcKind): string {
+  return kind === "event" ? "an event" : "a command";
+}
+
+function assertHostWorldOptions(options: unknown): asserts options is HostWorldOptions {
+  const source = assertOptionObject("createHostWorld", options);
+  assertProtocol("createHostWorld", source.protocol);
+  assertHostTransport(source.transport);
+  assertClock("createHostWorld", source.clock);
+  assertLogger("createHostWorld", source.logger);
+  if (
+    source.visibility !== undefined &&
+    source.visibility !== "all" &&
+    source.visibility !== "none"
+  ) {
+    throw new Error('createHostWorld() visibility must be "all" or "none"');
+  }
+  if (source.interest !== undefined && !isFunction(source.interest)) {
+    throw new Error("createHostWorld() interest must be a function");
+  }
+  if (source.channel !== undefined) {
+    throw new Error("createHostWorld() does not accept channel; control and snapshots use reliable, while RPCs declare their own channel");
+  }
+  assertKnownOptionKeys("createHostWorld", source, hostWorldOptionKeys);
+}
+
+function assertClientWorldOptions(options: unknown): asserts options is ClientWorldOptions {
+  const source = assertOptionObject("createClientWorld", options);
+  assertProtocol("createClientWorld", source.protocol);
+  assertClientTransport(source.transport);
+  assertClock("createClientWorld", source.clock);
+  assertLogger("createClientWorld", source.logger);
+  if (source.channel !== undefined) {
+    throw new Error("createClientWorld() does not accept channel; control and snapshots use reliable, while RPCs declare their own channel");
+  }
+  assertKnownOptionKeys("createClientWorld", source, clientWorldOptionKeys);
+}
+
+const hostWorldOptionKeys = new Set([
+  "protocol",
+  "transport",
+  "clock",
+  "logger",
+  "visibility",
+  "interest",
+]);
+
+const clientWorldOptionKeys = new Set([
+  "protocol",
+  "transport",
+  "clock",
+  "logger",
+  "onSnapshot",
+]);
+
+function assertKnownOptionKeys(
+  factoryName: "createHostWorld" | "createClientWorld",
+  options: Record<string, unknown>,
+  knownKeys: ReadonlySet<string>,
+): void {
+  for (const key of Object.keys(options)) {
+    if (!knownKeys.has(key)) {
+      throw new Error(`${factoryName}() received unknown option "${key}"`);
+    }
+  }
+}
+
+function assertOptionObject(
+  factoryName: "createHostWorld" | "createClientWorld",
+  options: unknown,
+): Record<string, unknown> {
+  if (!isPlainObjectMap(options)) {
+    throw new Error(`${factoryName}() requires an options object (plain object map)`);
+  }
+  return options;
+}
+
+function assertProtocol(
+  factoryName: "createHostWorld" | "createClientWorld",
+  protocol: unknown,
+): asserts protocol is ProtocolDefinition {
+  if (!isProtocolDefinition(protocol)) {
+    throw new Error(`${factoryName}() requires a protocol from defineProtocol()`);
+  }
+}
+
+function assertHostTransport(transport: unknown): asserts transport is HostTransport {
+  if (
+    transport === null ||
+    typeof transport !== "object" ||
+    !isFunction((transport as { readonly send?: unknown }).send) ||
+    !isFunction((transport as { readonly broadcast?: unknown }).broadcast) ||
+    !isFunction((transport as { readonly onPacket?: unknown }).onPacket)
+  ) {
+    throw new Error("createHostWorld() requires a host transport with send(), broadcast(), and onPacket()");
+  }
+}
+
+function assertClientTransport(transport: unknown): asserts transport is ClientTransport {
+  if (
+    transport === null ||
+    typeof transport !== "object" ||
+    !isFunction((transport as { readonly send?: unknown }).send) ||
+    !isFunction((transport as { readonly onPacket?: unknown }).onPacket)
+  ) {
+    throw new Error("createClientWorld() requires a client transport with send() and onPacket()");
+  }
+}
+
+function assertClock(
+  factoryName: "createHostWorld" | "createClientWorld",
+  clock: unknown,
+): asserts clock is Clock {
+  if (
+    clock === null ||
+    typeof clock !== "object" ||
+    !isFunction((clock as { readonly nowMs?: unknown }).nowMs) ||
+    !isFunction((clock as { readonly tick?: unknown }).tick)
+  ) {
+    throw new Error(`${factoryName}() requires a clock with nowMs() and tick()`);
+  }
+}
+
+function assertLogger(
+  factoryName: "createHostWorld" | "createClientWorld",
+  logger: unknown,
+): asserts logger is Logger | undefined {
+  if (logger === undefined) {
+    return;
+  }
+  if (logger === null || typeof logger !== "object" || Array.isArray(logger)) {
+    throw new Error(`${factoryName}() logger must be an object`);
+  }
+  for (const method of ["debug", "info", "warn", "error"] as const) {
+    const value = (logger as Record<string, unknown>)[method];
+    if (value !== undefined && !isFunction(value)) {
+      throw new Error(`${factoryName}() logger.${method} must be a function`);
+    }
+  }
+}
+
+function checkedClock(factoryName: "createHostWorld()" | "createClientWorld()", clock: Clock): Clock {
+  return {
+    nowMs() {
+      const nowMs = clock.nowMs();
+      if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
+        throw new Error(`${factoryName} clock.nowMs() must return a finite number`);
+      }
+      return nowMs;
+    },
+    tick() {
+      const tick = clock.tick();
+      if (!Number.isInteger(tick) || tick < 0 || tick > 0xffffffff) {
+        throw new Error(`${factoryName} clock.tick() must return an integer in [0, 4294967295]`);
+      }
+      return tick;
+    },
+  };
+}
+
+function assertMonotonicNowMs(
+  factoryName: "createHostWorld()" | "createClientWorld()",
+  previousNowMs: number | undefined,
+  nowMs: number,
+): void {
+  if (previousNowMs !== undefined && nowMs < previousNowMs) {
+    throw new Error(`${factoryName} clock.nowMs() must be monotonic`);
+  }
+}
+
+function assertSystemRegistration(
+  name: unknown,
+  phase: unknown,
+  fn: unknown,
+): asserts fn is SystemFn {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error("world.system() requires a non-empty system name");
+  }
+  if (typeof phase !== "string" || !systemPhases.has(phase)) {
+    throw new Error('world.system() phase must be "preUpdate", "update", "postUpdate", or "network"');
+  }
+  if (!isFunction(fn)) {
+    throw new Error("world.system() requires a function");
+  }
+}
+
+function assertEachCallback(fn: unknown): asserts fn is EachFn<readonly ComponentSchema[]> {
+  if (!isFunction(fn)) {
+    throw new Error("world.each() requires a function");
+  }
+}
+
+function entityIdFrom(entity: number | ReadonlyEntityRef, label: string): number {
+  if (typeof entity === "number") {
+    assertEntityId(entity, label);
+    return entity;
+  }
+  if (entity === null || typeof entity !== "object" || !("id" in entity)) {
+    throw new Error(`${label} requires an entity id or entity ref`);
+  }
+  const entityId = (entity as { readonly id?: unknown }).id;
+  if (typeof entityId !== "number") {
+    throw new Error(`${label} requires an entity id or entity ref`);
+  }
+  assertEntityId(entityId, label);
+  return entityId;
+}
+
+function assertEntityId(entityId: number, label: string): void {
+  if (!Number.isSafeInteger(entityId) || entityId < 1) {
+    throw new Error(`${label} requires a positive integer entity id`);
+  }
+}
+
+function assertPeerRef(peer: unknown, label: string): asserts peer is PeerRef {
+  const kind = typeof peer;
+  if (
+    peer === null ||
+    peer === undefined ||
+    kind === "boolean" ||
+    kind === "bigint" ||
+    kind === "function" ||
+    (kind === "number" && !Number.isFinite(peer))
+  ) {
+    throw new Error(`${label} requires a peer ref`);
+  }
+}
+
+function assertChannelName(channel: unknown, label: string): asserts channel is ChannelName {
+  if (channel !== "reliable" && channel !== "unreliable") {
+    throw new Error(`${label} channel must be "reliable" or "unreliable"`);
+  }
+}
+
+function assertPacketBytes(bytes: unknown, label: string): asserts bytes is Uint8Array {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new Error(`${label} bytes must be a Uint8Array`);
+  }
+}
+
+function copyPacketBytes(bytes: Uint8Array): Uint8Array {
+  return bytes.slice();
+}
+
+function isFunction(value: unknown): value is (...args: never[]) => unknown {
+  return typeof value === "function";
+}

@@ -1,0 +1,242 @@
+:root {
+  background: #f3f5f7;
+  color: #18212c;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  background: #ffffff;
+  border: 1px solid #b9c4cf;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+button:hover {
+  border-color: #246bfe;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 28px;
+}
+
+.topbar {
+  align-items: end;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin: 0 auto 20px;
+  max-width: 1180px;
+}
+
+.topbar h1,
+.panel h2 {
+  margin: 0;
+}
+
+.topbar p {
+  color: #566575;
+  margin: 8px 0 0;
+  max-width: 790px;
+}
+
+code {
+  background: #e8edf2;
+  border: 1px solid #ccd5df;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.home {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 auto;
+  max-width: 780px;
+}
+
+.home a,
+.panel {
+  background: #ffffff;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+}
+
+.home a {
+  color: inherit;
+  min-height: 128px;
+  padding: 18px;
+  text-decoration: none;
+}
+
+.home strong {
+  display: block;
+  font-size: 22px;
+  margin-bottom: 8px;
+}
+
+.home span,
+.panel p {
+  color: #647485;
+}
+
+.layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 360px minmax(420px, 1fr);
+  margin: 0 auto;
+  max-width: 1180px;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panel-head {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.status {
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 7px 9px;
+}
+
+.online {
+  background: #ddf7e7;
+  color: #116537;
+}
+
+.offline {
+  background: #f7dfdf;
+  color: #8d2e2e;
+}
+
+.error {
+  background: #fff1f1;
+  border: 1px solid #efb8b8;
+  border-radius: 6px;
+  color: #9b2f2f;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.stats {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stats div {
+  border: 1px solid #e0e6ed;
+  border-radius: 6px;
+  min-height: 56px;
+  padding: 9px;
+}
+
+.stats span {
+  color: #6d7b89;
+  display: block;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.stats strong {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.playfield {
+  align-items: center;
+  background:
+    linear-gradient(#e7edf3 1px, transparent 1px),
+    linear-gradient(90deg, #e7edf3 1px, transparent 1px),
+    #ffffff;
+  background-size: 24px 24px;
+  display: flex;
+  grid-row: span 2;
+  height: 520px;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.entity {
+  align-items: center;
+  background: #246bfe;
+  border-radius: 6px;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  height: 48px;
+  justify-content: center;
+  left: calc(50% - 24px);
+  position: absolute;
+  top: calc(50% - 24px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  width: 48px;
+}
+
+.entity small {
+  opacity: 0.82;
+}
+
+.entity.dead {
+  opacity: 0.4;
+}
+
+.manifest {
+  display: grid;
+  gap: 10px;
+}
+
+.manifest p {
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    padding: 18px;
+  }
+
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home,
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .playfield {
+    height: 360px;
+  }
+}
