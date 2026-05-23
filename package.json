@@ -15,7 +15,7 @@
     "dist"
   ],
   "scripts": {
-    "bench": "vitest run test/benchmark.test.ts test/benchmark-memory.test.ts --reporter=verbose",
+    "bench": "vitest run test/benchmark.test.ts test/benchmark-examples.test.ts test/benchmark-memory.test.ts --reporter=verbose",
     "bench:branch:compare": "node ./scripts/bench-branch-compare.mjs",
     "bench:memory:compare": "node ./scripts/bench-memory-compare.mjs",
     "build": "tsdown",

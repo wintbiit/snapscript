@@ -33,7 +33,7 @@ function parseArgs() {
 
 function parseRows(output) {
   const rows = [];
-  const marker = /^\[branch-bench-summary\]\s+(\{.*\})$/;
+  const marker = /^\[(?:branch|example)-bench-summary\]\s+(\{.*\})$/;
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(marker);
     if (match === null || match[1] === undefined) {
@@ -121,10 +121,11 @@ function runWorkspace(name, cwd, testFile) {
     BENCH_TIME_MS: process.env.BENCH_TIME_MS ?? "20",
     BENCH_WARMUP_TIME_MS: process.env.BENCH_WARMUP_TIME_MS ?? "5",
   };
+  run("pnpm build", cwd, env);
   const output = run(`pnpm exec vitest run ${testFile} --reporter=verbose`, cwd, env);
   const rows = parseRows(output);
   if (rows.length === 0) {
-    throw new Error(`No branch-bench-summary output found in ${name}`);
+    throw new Error(`No benchmark summary output found in ${name}`);
   }
   return rows;
 }
@@ -136,6 +137,17 @@ function formatMs(value) {
 function formatPercent(value) {
   const sign = value >= 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
+}
+
+function formatWorkload(row) {
+  const parts = [];
+  if (row.rows !== undefined) {
+    parts.push(`rows=${row.rows}`);
+  }
+  if (row.bytes !== undefined) {
+    parts.push(`bytes=${row.bytes}`);
+  }
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }
 
 function compare(soaRows, mainRows) {
@@ -157,7 +169,8 @@ function compare(soaRows, mainRows) {
     const speedup = soa.medianMs === 0 ? Number.POSITIVE_INFINITY : main.medianMs / soa.medianMs;
     matched.push({ key, main, soa, percent, speedup });
     console.log(
-      `${key}: main=${formatMs(main.medianMs)} soa=${formatMs(soa.medianMs)} ` +
+      `${key}: main=${formatMs(main.medianMs)}${formatWorkload(main)} ` +
+        `soa=${formatMs(soa.medianMs)}${formatWorkload(soa)} ` +
         `delta=${formatPercent(percent)} speedup=${speedup.toFixed(2)}x ` +
         `samples=${soa.samples}/${main.samples}`,
     );

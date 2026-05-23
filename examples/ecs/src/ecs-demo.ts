@@ -19,9 +19,7 @@ import {
   type PeerRef,
   type ClientWorld,
   type HostWorld,
-  type QueryResult,
-  type ReadonlyComponentInstanceOf,
-  type ReadonlyEntityRef,
+  type ReplicatedStateReader,
 } from "snapscript";
 
 export const Position = defineComponent("EcsExamplePosition", {
@@ -46,7 +44,8 @@ export const Player = defineEntity("EcsExamplePlayer", {
 });
 
 // Reusable query tuples should keep literal tuple inference for typed each/query rows.
-const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
+export const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
+export const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
 export const MoveCommand = defineCommand("EcsExampleMove", {
   dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
@@ -91,7 +90,11 @@ export interface DemoSnapshot {
   readonly benchmark: string;
 }
 
-class BrowserClock implements Clock {
+export interface EcsSeedOptions {
+  readonly includeDefaultActors?: boolean;
+}
+
+export class BrowserClock implements Clock {
   #tick = 0;
 
   nowMs(): number {
@@ -108,7 +111,23 @@ class BrowserClock implements Clock {
   }
 }
 
-class WebSocketTransport implements ClientTransport, HostTransport {
+export interface EcsDemoTransport {
+  readonly connected: boolean;
+  readonly error: string | undefined;
+  readonly sent: number;
+  readonly received: number;
+  readonly lastChannel: ChannelName | undefined;
+  send(channel: ChannelName, bytes: Uint8Array): void;
+  send(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void;
+  broadcast(channel: ChannelName, bytes: Uint8Array): void;
+  peers(): Iterable<PeerRef>;
+  onPacket(cb: (channel: ChannelName, bytes: Uint8Array) => void): void;
+  onPacket(cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void;
+  connect(url: string): void;
+  close(): void;
+}
+
+class WebSocketTransport implements EcsDemoTransport {
   readonly #peer: PeerRef = "relay";
   #socket?: WebSocket;
   #clientHandler?: (channel: ChannelName, bytes: Uint8Array) => void;
@@ -226,36 +245,33 @@ class WebSocketTransport implements ClientTransport, HostTransport {
 }
 
 export class HostDemo {
-  readonly clock = new BrowserClock();
-  readonly #transport = new WebSocketTransport();
-  readonly world = createHostWorld({ protocol, transport: this.#transport, clock: this.clock });
+  readonly clock: BrowserClock;
+  readonly #transport: EcsDemoTransport;
+  readonly world: HostWorld;
   readonly player: EntityRef;
   readonly npc: EntityRef;
   #lastEvent: string | undefined;
   #benchmark = "--";
 
-  constructor() {
-    // Host constructs and owns all authoritative entities.
-    this.player = this.world.spawn(Player, {
-      position: { x: -4, y: 0 },
-      health: { hp: 100 },
+  constructor(transport: EcsDemoTransport = new WebSocketTransport(), clock = new BrowserClock()) {
+    this.#transport = transport;
+    this.clock = clock;
+    this.world = createHostWorld({
+      protocol,
+      transport: this.#transport,
+      clock: this.clock,
+      // Keep the example's interest model explicit: every entity is visible to every peer.
+      visibility: "all",
+      // Opt into the negotiated batched snapshot path used by query-heavy ECS examples.
+      snapshotEncoding: "batched",
     });
-    this.npc = this.world.spawn();
-    this.world.add(this.npc, Player, {
-      position: { x: 5, y: 2 },
-      velocity: { x: -0.02, y: 0 },
-      health: { hp: 60 },
-    });
-    this.world.setVisible("debug-peer", this.npc, true);
+
+    const seeded = seedEcsExampleWorld(this.world, 0, { includeDefaultActors: true });
+    this.player = seeded.player!;
+    this.npc = seeded.npc!;
 
     this.world.system("movement", "update", (world) => {
-      // `each()` avoids materializing public query rows in hot update loops.
-      world.each(MovementQuery, (_entity, pos, vel) => {
-        pos.x.value += vel.x.value;
-        pos.y.value += vel.y.value;
-        vel.x.value *= 0.92;
-        vel.y.value *= 0.92;
-      });
+      runEcsMovementSystem(world);
     });
 
     this.world.on(MoveCommand, (payload) => {
@@ -331,13 +347,17 @@ export class HostDemo {
 }
 
 export class ClientDemo {
-  readonly clock = new BrowserClock();
-  readonly #transport = new WebSocketTransport();
-  readonly world = createClientWorld({ protocol, transport: this.#transport, clock: this.clock });
+  readonly clock: BrowserClock;
+  readonly #transport: EcsDemoTransport;
+  readonly world: ClientWorld;
   #lastEvent: string | undefined;
   #benchmark = "--";
 
-  constructor() {
+  constructor(transport: EcsDemoTransport = new WebSocketTransport(), clock = new BrowserClock()) {
+    this.#transport = transport;
+    this.clock = clock;
+    this.world = createClientWorld({ protocol, transport: this.#transport, clock: this.clock });
+
     this.world.on(DamageEvent, (payload) => {
       // Events are side-channel notifications; component truth still comes from snapshots.
       this.#lastEvent = `damage fx ${payload.amount} on #${payload.entityId}`;
@@ -366,8 +386,8 @@ export class ClientDemo {
 
   runBenchmark(): void {
     const start = performance.now();
-    const rows = this.world.query(Position, Health).length;
-    this.#benchmark = `${rows} visible rows in ${(performance.now() - start).toFixed(2)} ms`;
+    const rows = toViews(this.world).length;
+    this.#benchmark = `${rows} rendered views in ${(performance.now() - start).toFixed(2)} ms`;
   }
 
   snapshot(): DemoSnapshot {
@@ -389,26 +409,74 @@ export class ClientDemo {
   }
 }
 
-function toViews(world: HostWorld): EntityView[];
-function toViews(world: ClientWorld): EntityView[];
-function toViews(world: HostWorld | ClientWorld): EntityView[] {
-  const readable = world as {
-    query(component: typeof Position): QueryResult<readonly [typeof Position], ReadonlyEntityRef>;
-    get(
-      entity: number | ReadonlyEntityRef,
-      component: typeof Health,
-    ): ReadonlyComponentInstanceOf<typeof Health> | undefined;
-  };
-  return readable.query(Position).map(([entity, pos]) => {
-    // Host and client worlds share read APIs, so UI code can render either side through the same query path.
-    const health = readable.get(entity, Health);
-    return {
+export function seedEcsExampleWorld(
+  world: HostWorld,
+  extraNpcCount = 0,
+  options: EcsSeedOptions = {},
+): { readonly player?: EntityRef; readonly npc?: EntityRef } {
+  const includeDefaultActors = options.includeDefaultActors ?? false;
+  let player: EntityRef | undefined;
+  let npc: EntityRef | undefined;
+
+  if (includeDefaultActors) {
+    // Host constructs and owns all authoritative entities.
+    player = world.spawn(Player, {
+      position: { x: -4, y: 0 },
+      health: { hp: 100 },
+    });
+    npc = world.spawn();
+    world.add(npc, Player, {
+      position: { x: 5, y: 2 },
+      velocity: { x: -0.02, y: 0 },
+      health: { hp: 60 },
+    });
+  }
+
+  for (let index = 0; index < extraNpcCount; index += 1) {
+    const entity = world.spawn();
+    world.add(entity, Player, {
+      position: {
+        x: (index % 64) - 32,
+        y: Math.floor(index / 64) % 64,
+      },
+      velocity: {
+        x: index % 2 === 0 ? 0.02 : -0.02,
+        y: index % 3 === 0 ? 0.01 : -0.01,
+      },
+      health: {
+        hp: 100 - (index % 40),
+      },
+    });
+  }
+
+  return player === undefined || npc === undefined ? {} : { player, npc };
+}
+
+export function runEcsMovementSystem(world: HostWorld): number {
+  let rows = 0;
+  // `each()` avoids materializing public query rows in hot update loops.
+  world.each(MovementQuery, (_entity, pos, vel) => {
+    pos.x.value += vel.x.value;
+    pos.y.value += vel.y.value;
+    vel.x.value *= 0.92;
+    vel.y.value *= 0.92;
+    rows += 1;
+  });
+  return rows;
+}
+
+export function toViews(world: ReplicatedStateReader): EntityView[] {
+  const views: EntityView[] = [];
+  world.each(RenderQuery, (entity, pos, health) => {
+    // The example renders Player rows, so read required render components in one typed pass.
+    views.push({
       id: entity.id,
       x: pos.x.value,
       y: pos.y.value,
-      hp: health?.hp.value,
-      dead: health?.dead.value ?? false,
+      hp: health.hp.value,
+      dead: health.dead.value,
       visible: true,
-    };
+    });
   });
+  return views;
 }

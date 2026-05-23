@@ -402,6 +402,7 @@ The current benchmark covers:
 - component add/remove churn
 - fanout across peers
 - map storage vs sparse-set vs sparse-set plus archetype index
+- example-derived ECS host movement, host sync, and client render paths
 
 Representative local run on 2026-05-23:
 
@@ -417,6 +418,12 @@ Representative local run on 2026-05-23:
 The tradeoff is structural churn. Component add/remove churn is currently about 2.6x to 3.0x slower than the map baseline in the microbenchmark because the archetype index maintains signatures and buckets. This is acceptable for query-heavy worlds, but high-churn worlds are the first tuning target.
 
 SoA storage is not part of the current default. It remains a future internal storage option because it would change `NetRef` from a value holder into a slot handle and affect query, dirty tracking, snapshot encoding, and codec paths.
+
+Example-derived benchmarks use `examples/ecs` protocol, prefab definitions, host movement logic,
+full snapshot handshakes, dirty sync, and client render queries. They are the preferred regression
+gate for user-visible performance because they measure the same world API shape developers copy from
+the examples. Microbenchmarks are still useful for isolating storage and codec costs, but they should
+not be treated as proof of end-to-end framework speed by themselves.
 
 ## Internal Architecture Notes
 
