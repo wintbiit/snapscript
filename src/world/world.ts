@@ -1257,18 +1257,29 @@ function assertComponentSchema(
 }
 
 function readonlyNetRef<T>(source: NetRef<T>): ReadonlyNetRef<T> {
-  return Object.freeze({
-    get value() {
-      return source.peek();
-    },
-    set value(_value: T) {
-      throw new Error(
-        `Cannot mutate read-only replicated field "${source.meta.schemaName}.${source.meta.fieldName}". Send a command to the host or mutate state from a HostWorld.`,
-      );
-    },
-    meta: source.meta,
-    peek: () => source.peek(),
-  });
+  return Object.freeze(new ReadonlyNetRefImpl(source));
+}
+
+class ReadonlyNetRefImpl<T> implements ReadonlyNetRef<T> {
+  readonly meta;
+
+  constructor(private readonly source: NetRef<T>) {
+    this.meta = source.meta;
+  }
+
+  get value(): T {
+    return this.source.peek();
+  }
+
+  set value(_value: T) {
+    throw new Error(
+      `Cannot mutate read-only replicated field "${this.meta.schemaName}.${this.meta.fieldName}". Send a command to the host or mutate state from a HostWorld.`,
+    );
+  }
+
+  peek(): T {
+    return this.source.peek();
+  }
 }
 
 class QueuedClientTransport implements ClientTransport {
