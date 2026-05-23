@@ -5,6 +5,7 @@ import type { RpcContext, RpcDefinition, RpcHandler } from "../rpc/index";
 import type { FieldDefinitions, FieldValues } from "../schema/index";
 import {
   applySnapshot,
+  ControlCapability,
   ControlType,
   decodeControl,
   encodeControl,
@@ -74,6 +75,7 @@ export interface SyncClient {
 interface PeerState {
   readonly knownEntities: Set<number>;
   readonly knownComponents: Set<string>;
+  capabilities: number;
 }
 
 type HandlerEntry = {
@@ -146,6 +148,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
       const messageType = peekMessageType(bytes);
       if (messageType === MessageType.Control) {
         const control = decodeControl(bytes);
+        stateFor(peerStates, peer).capabilities = control.capabilities;
         if (
           control.type === ControlType.Hello ||
           control.type === ControlType.FullSnapshotRequest
@@ -237,8 +240,8 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
           options.transport.send(
             peer,
             "unreliable",
-            encodedPacket(encodedUpdates, "u", updates, () =>
-              encodeUpdateSnapshotOps(options, tick, updates),
+            encodedPacket(encodedUpdates, updateEncodingKey(options, state), updates, () =>
+              encodeUpdateSnapshotOps(options, state, tick, updates),
             ),
           );
         }
@@ -277,6 +280,9 @@ function trySendSharedUpdate(
 
   for (const peer of peers) {
     const state = stateFor(peerStates, peer);
+    if (options.snapshotEncoding === "batched" && !supportsBatchedSnapshots(state)) {
+      return false;
+    }
     for (const op of dirty.updated) {
       if (!state.knownComponents.has(componentKey(op.entityId, op.componentId))) {
         return false;
@@ -284,7 +290,9 @@ function trySendSharedUpdate(
     }
   }
 
-  const bytes = encodeUpdateSnapshotOps(options, tick, { updated: dirty.updated });
+  const bytes = encodeUpdateSnapshotOps(options, stateFor(peerStates, peers[0]!), tick, {
+    updated: dirty.updated,
+  });
   for (const peer of peers) {
     options.transport.send(peer, "unreliable", bytes);
   }
@@ -293,12 +301,21 @@ function trySendSharedUpdate(
 
 function encodeUpdateSnapshotOps(
   options: SyncHostOptions,
+  state: PeerState,
   tick: number,
   ops: SnapshotWriteOps,
 ): Uint8Array {
-  return options.snapshotEncoding === "batched"
+  return options.snapshotEncoding === "batched" && supportsBatchedSnapshots(state)
     ? encodeSnapshotOpsBatched(options.world, tick, ops)
     : encodeSnapshotOps(options.world, tick, ops);
+}
+
+function updateEncodingKey(options: SyncHostOptions, state: PeerState): string {
+  return options.snapshotEncoding === "batched" && supportsBatchedSnapshots(state) ? "ub" : "u";
+}
+
+function supportsBatchedSnapshots(state: PeerState): boolean {
+  return (state.capabilities & ControlCapability.BatchedSnapshots) !== 0;
 }
 
 function encodedPacket(
@@ -382,13 +399,16 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   function requestFullSnapshot(): void {
     options.transport.send(
       "reliable",
-      encodeControl(ControlType.FullSnapshotRequest, options.clock.tick()),
+      encodeControl(ControlType.FullSnapshotRequest, options.clock.tick(), clientCapabilities()),
     );
   }
 
   return {
     start() {
-      options.transport.send("reliable", encodeControl(ControlType.Hello, options.clock.tick()));
+      options.transport.send(
+        "reliable",
+        encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities()),
+      );
     },
     requestFullSnapshot,
     send(rpc, payload) {
@@ -398,6 +418,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       return handlers.add(rpc, handler);
     },
   };
+}
+
+function clientCapabilities(): number {
+  return ControlCapability.BatchedSnapshots;
 }
 
 function logError(logger: Logger | undefined, message: string, error: unknown): void {
@@ -418,6 +442,7 @@ function stateFor(map: Map<PeerRef, PeerState>, peer: PeerRef): PeerState {
   const state = {
     knownEntities: new Set<number>(),
     knownComponents: new Set<string>(),
+    capabilities: 0,
   };
   map.set(peer, state);
   return state;

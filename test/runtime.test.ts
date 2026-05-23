@@ -16,7 +16,14 @@ import {
 import { createRegistry } from "../src/registry/index";
 import { createSyncClient, createSyncHost } from "../src/runtime/index";
 import { BitReader } from "../src/binary/index";
-import { applySnapshot, ControlType, encodeControl, SnapshotOp } from "../src/sync/index";
+import {
+  applySnapshot,
+  ControlCapability,
+  ControlType,
+  decodeControl,
+  encodeControl,
+  SnapshotOp,
+} from "../src/sync/index";
 import { worldInternals } from "../src/world/internals";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
@@ -111,6 +118,21 @@ function clock(): Clock {
 }
 
 describe("sync runtime", () => {
+  it("keeps control capability bits backward compatible", () => {
+    expect(decodeControl(encodeControl(ControlType.Hello, 7))).toEqual({
+      tick: 7,
+      type: ControlType.Hello,
+      capabilities: 0,
+    });
+    expect(
+      decodeControl(encodeControl(ControlType.Hello, 8, ControlCapability.BatchedSnapshots)),
+    ).toEqual({
+      tick: 8,
+      type: ControlType.Hello,
+      capabilities: ControlCapability.BatchedSnapshots,
+    });
+  });
+
   it("sends a full snapshot when the client starts", () => {
     const Player = defineEntity("RuntimeFullPlayer", {
       hp: u16(100),
@@ -137,6 +159,10 @@ describe("sync runtime", () => {
 
     client.start();
 
+    expect(decodeControl(clientTransport.packets[0]!)).toMatchObject({
+      type: ControlType.Hello,
+      capabilities: ControlCapability.BatchedSnapshots,
+    });
     expect(clientWorld.get(player.id, PlayerState)?.hp.value).toBe(80);
     expect(host).toBeDefined();
   });
@@ -529,7 +555,11 @@ describe("sync runtime", () => {
       snapshotEncoding: "batched",
     });
 
-    transport.receive(peer, "reliable", encodeControl(ControlType.Hello, 1));
+    transport.receive(
+      peer,
+      "reliable",
+      encodeControl(ControlType.Hello, 1, ControlCapability.BatchedSnapshots),
+    );
     transport.sent.splice(0);
     const internals = worldInternals(world);
     internals.clearWrittenDirty(internals.getDirtySnapshot());
@@ -546,5 +576,44 @@ describe("sync runtime", () => {
     expect(reader.readVarUint()).toBe(0);
     expect(reader.readVarUint()).toBe(PlayerState.schemaId);
     expect(reader.readU8()).toBe(SnapshotOp.BatchUpdateComponent);
+  });
+
+  it("falls back to normal updates for peers that did not advertise batched snapshots", () => {
+    const Player = defineEntity("RuntimeBatchedSnapshotFallbackPlayer", {
+      hp: u16(100),
+    });
+    const PlayerState = Player.component;
+    const registry = createRegistry().registerComponent(PlayerState);
+    const protocol = testProtocol(Player);
+    const world = createTestHostWorld(protocol);
+    const first = world.spawn(Player);
+    const second = world.spawn(Player);
+    const transport = new PeerHostTransport();
+    const peer = "peer";
+    const host = createSyncHost({
+      world,
+      transport,
+      clock: clock(),
+      registry,
+      snapshotEncoding: "batched",
+    });
+
+    transport.receive(peer, "reliable", encodeControl(ControlType.Hello, 1));
+    transport.sent.splice(0);
+    const internals = worldInternals(world);
+    internals.clearWrittenDirty(internals.getDirtySnapshot());
+    world.get(first, PlayerState)!.hp.value = 80;
+    world.get(second, PlayerState)!.hp.value = 70;
+    host.update();
+
+    const packet = transport.sent.at(-1)!;
+    expect(packet.channel).toBe("unreliable");
+    const reader = new BitReader(packet.bytes);
+    expect(reader.readU8()).toBe(1);
+    reader.readU32();
+    expect(reader.readVarUint()).toBe(2);
+    expect(reader.readVarUint()).toBe(first.id);
+    expect(reader.readVarUint()).toBe(PlayerState.schemaId);
+    expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
   });
 });

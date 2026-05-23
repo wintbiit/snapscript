@@ -1,4 +1,5 @@
-export { ControlType, decodeControl, encodeControl } from "./control";
+export { ControlCapability, ControlType, decodeControl, encodeControl } from "./control";
+export type { ControlMessage } from "./control";
 export {
   applySnapshot,
   encodeDirty,

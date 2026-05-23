@@ -316,7 +316,7 @@ There is no generic public `Transport` type and no world-level default channel o
 
 Inbound packet bytes are copied when they enter the world queue, so adapters may reuse their receive buffers after invoking `onPacket`. Outbound bytes should be treated as immutable.
 
-Hosts can opt into batched dirty update snapshots when every peer in the session is known to run a compatible SnapScript version:
+Hosts can opt into batched dirty update snapshots:
 
 ```ts
 const hostWorld = createHostWorld({
@@ -327,7 +327,7 @@ const hostWorld = createHostWorld({
 });
 ```
 
-The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates, but they use a newer snapshot op. Do not enable them for mixed-version peers unless your transport/session layer has already negotiated support.
+The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates. When enabled, the host still sends batched update packets only to peers that advertise batched snapshot support in SnapScript control messages; older peers automatically receive the default update format.
 
 ## Visibility And Interest
 
@@ -434,7 +434,7 @@ The current default storage is sparse-set component storage with an archetype qu
 - two-component queries use smallest sparse table lookup
 - wider queries choose between archetype buckets and smallest sparse table
 
-Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Hosts may opt into batched dirty snapshots with `snapshotEncoding: "batched"` after the transport/session layer has confirmed peer compatibility.
+Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Hosts may opt into batched dirty snapshots with `snapshotEncoding: "batched"`; the runtime only sends batched packets to peers that advertised support and falls back per peer otherwise.
 
 The package root intentionally does not export binary readers/writers, raw registry factories, packet codecs, low-level sync runtimes, storage classes, or public `World` constructors.
 
