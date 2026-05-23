@@ -201,6 +201,28 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 
 World handles are frozen runtime objects. Keep non-replicated host application state in your own objects.
 
+When a helper only needs to read replicated state, type it as `ReplicatedStateReader`. Both `HostWorld`
+and `ClientWorld` satisfy this read-only surface, so render snapshots and debug inspectors can share one
+implementation without casts:
+
+```ts
+import type { ComponentQuery, ReplicatedStateReader } from "snapscript";
+
+const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
+
+function collectViews(state: ReplicatedStateReader) {
+  const views: { id: number; x: number; hp: number }[] = [];
+  state.each(RenderQuery, (entity, position, health) => {
+    views.push({
+      id: entity.id,
+      x: position.x.value,
+      hp: health.hp.value,
+    });
+  });
+  return views;
+}
+```
+
 ## ECS API
 
 The public ECS surface is intentionally small:

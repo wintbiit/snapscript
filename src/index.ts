@@ -61,6 +61,7 @@ export type {
   ReadonlyNetRef,
   ReadonlyPrefabInstance,
   ReadonlyPrefabInstanceOf,
+  ReplicatedStateReader,
   SystemContext,
   SystemFn,
   SystemPhase,

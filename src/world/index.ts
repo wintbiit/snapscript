@@ -23,6 +23,7 @@ export type {
   ReadonlyEntityRef,
   ReadonlyPrefabInstance,
   ReadonlyPrefabInstanceOf,
+  ReplicatedStateReader,
   SystemContext,
   SystemFn,
   SystemPhase,

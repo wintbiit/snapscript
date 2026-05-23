@@ -60,6 +60,7 @@ Keep examples aligned with these user paths:
 - `query().map()` and `query().forEach()` are acceptable for ordinary readable code, but hot render/system paths should still graduate to `each()`
 - repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
+- helpers that only read replicated state should accept `ReplicatedStateReader`, so host/client rendering paths share one implementation without local casts
 
 ## Benchmark Mapping
 

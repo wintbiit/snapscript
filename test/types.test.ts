@@ -17,6 +17,7 @@ import {
   type ProtocolManifestEntry,
   type ReadonlyPrefabInstanceOf,
   type PeerRef,
+  type ReplicatedStateReader,
 } from "../src/index";
 // @ts-expect-error World is intentionally not part of the public entrypoint.
 import type { World } from "../src/index";
@@ -98,6 +99,17 @@ const host = createHostWorld({ protocol, transport: hostTransport, clock });
 const client = createClientWorld({ protocol, transport, clock });
 const typedHost: HostWorld = host;
 typedHost.tick();
+const hostReader: ReplicatedStateReader = host;
+const clientReader: ReplicatedStateReader = client;
+hostReader.each(componentQuery, (_entity, position, velocity) => {
+  position.x.value.toFixed();
+  velocity.x.value.toFixed();
+  // @ts-expect-error shared replicated readers expose read-only component refs
+  position.x.value = 2;
+});
+clientReader.query(Position).forEach(([_entity, position]) => {
+  position.x.value.toFixed();
+});
 if (false) {
   // @ts-expect-error worlds require a protocol instead of a raw registry fallback
   createHostWorld({ transport: hostTransport, clock });

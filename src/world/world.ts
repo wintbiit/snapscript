@@ -341,8 +341,8 @@ export interface ClientWorldOptions {
   readonly logger?: Logger;
 }
 
-/** Read-only world view passed to host interest hooks. */
-export interface InterestWorld {
+/** Shared read-only replicated state view implemented by host worlds, client worlds, and interest hooks. */
+export interface ReplicatedStateReader {
   get<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
@@ -363,6 +363,9 @@ export interface InterestWorld {
     fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
   ): void;
 }
+
+/** Read-only world view passed to host interest hooks. */
+export interface InterestWorld extends ReplicatedStateReader {}
 
 function createWorldInternals(core: WorldCore): WorldInternals {
   return {

@@ -19,8 +19,7 @@ import {
   type PeerRef,
   type ClientWorld,
   type HostWorld,
-  type ReadonlyComponentInstanceOf,
-  type ReadonlyEntityRef,
+  type ReplicatedStateReader,
 } from "snapscript";
 
 export const Position = defineComponent("EcsExamplePosition", {
@@ -420,21 +419,9 @@ export class ClientDemo {
   }
 }
 
-function toViews(world: HostWorld): EntityView[];
-function toViews(world: ClientWorld): EntityView[];
-function toViews(world: HostWorld | ClientWorld): EntityView[] {
-  const readable = world as unknown as {
-    each(
-      components: typeof RenderQuery,
-      fn: (
-        entity: ReadonlyEntityRef,
-        position: ReadonlyComponentInstanceOf<typeof Position>,
-        health: ReadonlyComponentInstanceOf<typeof Health>,
-      ) => void,
-    ): void;
-  };
+function toViews(world: ReplicatedStateReader): EntityView[] {
   const views: EntityView[] = [];
-  readable.each(RenderQuery, (entity, pos, health) => {
+  world.each(RenderQuery, (entity, pos, health) => {
     // The example renders Player rows, so read required render components in one typed pass.
     views.push({
       id: entity.id,
