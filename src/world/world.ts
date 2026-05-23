@@ -574,8 +574,22 @@ class WorldCore implements QueryWorldAccess {
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
   ): ReadonlyComponentInstance<FieldDefinitions> | undefined {
-    const instance = this.getAny(entity, componentOrPrefab);
-    return instance === undefined ? undefined : this.#readonlyComponent(instance);
+    const entityId = entityIdFrom(entity, "world.get()");
+    if (hasComponentList(componentOrPrefab)) {
+      this.#assertPrefabInProtocol(componentOrPrefab, "get");
+      const component = componentOrPrefab.component;
+      if (component === undefined) {
+        throw new Error(
+          `Prefab "${componentOrPrefab.name}" does not have a single primary component`,
+        );
+      }
+      this.#assertComponentInProtocol(component, "get");
+      const record = this.#storage.get(entityId, component.schemaId);
+      return record === undefined ? undefined : this.#readonlyComponent(record.instance);
+    }
+    this.#assertComponentInProtocol(componentOrPrefab, "get");
+    const record = this.#storage.get(entityId, componentOrPrefab.schemaId);
+    return record === undefined ? undefined : this.#readonlyComponent(record.instance);
   }
 
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
