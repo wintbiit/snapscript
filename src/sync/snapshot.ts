@@ -244,6 +244,20 @@ function groupBatchableUpdates(updated: readonly SnapshotUpdateOp[]): {
     return { singleUpdates: updated, batchGroups: [] };
   }
 
+  if (updatesAreHomogeneous(updated)) {
+    const first = updated[0]!;
+    return {
+      singleUpdates: [],
+      batchGroups: [
+        {
+          componentId: first.componentId,
+          fieldMask: first.fieldMask,
+          updates: updated,
+        },
+      ],
+    };
+  }
+
   // Most frames touch only a few component/mask groups; avoid Map setup until grouping is wide.
   const groups: BatchUpdateBuilder[] = [];
   let groupsByComponent: Map<number, Map<number, BatchUpdateBuilder>> | undefined;
@@ -279,6 +293,17 @@ function groupBatchableUpdates(updated: readonly SnapshotUpdateOp[]): {
   }
 
   return { singleUpdates, batchGroups };
+}
+
+function updatesAreHomogeneous(updated: readonly SnapshotUpdateOp[]): boolean {
+  const first = updated[0]!;
+  for (let index = 1; index < updated.length; index += 1) {
+    const update = updated[index]!;
+    if (update.componentId !== first.componentId || update.fieldMask !== first.fieldMask) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function findBatchGroup(
