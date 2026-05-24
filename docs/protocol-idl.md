@@ -223,52 +223,6 @@ This keeps the world API unchanged while making generated usage more declarative
 `clientWorld.send(Move, payload)`, `hostWorld.on(Move, handler)`, `hostWorld.broadcast(Event,
 payload)`, and `clientWorld.on(Event, handler)` APIs remain available.
 
-## Systems In IDL
-
-Whether systems belong in `.snap` is intentionally open.
-
-Reasons to include systems later:
-
-- A generated project can show where host/client/shared gameplay code plugs in.
-- Commands can discover intended handlers or handler stub names.
-- Examples may become more complete and easier to scaffold.
-
-Reasons to keep systems out of phase one:
-
-- Systems are behavior, not protocol shape.
-- Binding commands directly to systems can blur RPC intent and gameplay policy.
-- Host/client authority rules are easier to keep explicit in TypeScript code.
-- `.snap` should not become a game/app framework.
-
-Current recommendation:
-
-- Phase one IDL should define data and RPC surface only.
-- Generated handler stubs may be produced as optional files, but system registration remains in
-  TypeScript.
-- Revisit system declarations only after the user-facing syntax is decided and examples reveal
-  repeated boilerplate.
-
-## Command And System Binding
-
-Commands should not be hard-bound to systems in the first design.
-
-Preferred model:
-
-- Commands define client intent payloads.
-- Generated bindings make sending and handling commands ergonomic.
-- Host TypeScript decides whether a handler mutates state directly, queues intent, or invokes a
-  system-owned service.
-
-Possible later extension:
-
-```snap
-command Move channel unreliable {
-  dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
-} handledBy MovementInput
-```
-
-This should remain optional scaffold metadata unless there is a clear project-level need.
-
 ## Open Questions
 
 - Exact `.snap` syntax and naming conventions.
