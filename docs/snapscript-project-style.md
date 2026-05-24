@@ -2,18 +2,19 @@
 
 Last reviewed: 2026-05-25
 
-This document defines the project style that `snapscript-cli` should generate. It is the working
-best-practice target for SnapScript projects: `.snap` owns protocol shape, generated code owns
-mechanical wiring, and user code owns gameplay logic, transports, rendering, persistence, and app
-lifecycle.
+This document defines the project style that `snapscript-cli` should generate. The target project is
+a platform-neutral game core package: `.snap` owns protocol shape, generated code owns mechanical
+wiring, and user code owns gameplay logic. Browser, Node, puerts, Unity/Unreal bindings, deployment,
+persistence, accounts, matchmaking, rendering, and real network adapters live in platform projects
+that depend on the generated core package.
 
 ## User Goals
 
 SnapScript users should be able to:
 
-- create a complete project with `snapscript new`
-- define replicated protocol once in `.snap`
-- regenerate stable protocol and RPC bindings with `snapscript generate`
+- create a complete game core package with `snapscript new`
+- define replicated protocol once in a root `.snap` file
+- regenerate protocol and RPC bindings with `snapscript generate`
 - write gameplay logic in stable files that are never overwritten
 - keep server/client world creation explicit and easy to inspect
 - run the same ECS logic style in Node, browser, puerts, or another JS host
@@ -24,6 +25,7 @@ Users should not need to:
 
 - hand-write repetitive RPC binding code
 - manually assign stable field ids
+- maintain a separate generated lock file
 - manually maintain system registration index files
 - learn internal packet/snapshot details
 - wrap their project in a SnapScript `Game`, `App`, `Room`, or server SDK abstraction
@@ -40,80 +42,75 @@ The runtime package stays small and platform-neutral. Project templates, `.snap`
 initialization, system scanning, generated registries, formatting, and stale-file reporting belong
 in `snapscript-cli`.
 
-## CLI Shape
+## Core Package Shape
 
-`snapscript new my-game` should generate a complete runnable TypeScript project:
-
-- `package.json`
-- `tsconfig.json`
-- protocol source and lock file
-- generated protocol/RPC files
-- server/client world bootstrap files
-- server/client system folders and generated system registries
-- user-owned RPC logic stubs
-- a minimal test or local smoke fixture
-- transport guidance, but no production networking implementation
-
-`snapscript generate` should update only generated files and create missing user stubs. It should
-not overwrite user logic.
-
-## Generated Project Shape
-
-Recommended first generated shape:
+`snapscript new my-game-core` should generate a complete TypeScript package, not a deployable server
+app and not a browser app:
 
 ```txt
-my-project/
+my-game-core/
+  game.snap
   package.json
   tsconfig.json
-  protocol/
-    main.snap
-    snapscript.lock.json
   src/
-    protocol/
-      generated/
+    create-server.ts
+    create-client.ts
+    generated/
+      snapscript/
         protocol.ts
         manifest.json
         rpc.ts
-      logic/
-        movement/
-          move.command.ts
-          move-disabled.event.ts
+    rpc/
+      server/
+        move.command.ts
+      client/
+        move-disabled.event.ts
     systems/
       server/
-        movement.system.ts
+        10-movement.system.ts
       client/
-        view.system.ts
+        10-view.system.ts
       generated/
         server.ts
         client.ts
-    world/
-      server.ts
-      client.ts
     transport/
+      memory.ts
       README.md
 ```
 
 This layout uses SnapScript vocabulary rather than Go-style `internal/handler/logic/svc`. The user
-sees protocol, logic, systems, world, and transport directly.
+sees protocol, RPC logic, systems, generated files, world composition, and test transport directly.
+
+`package.json` should provide scripts that reference the root `.snap` file:
+
+```json
+{
+  "scripts": {
+    "snap:check": "snapscript check game.snap",
+    "snap:generate": "snapscript generate game.snap --out src/generated/snapscript"
+  }
+}
+```
 
 ## Ownership Rules
 
 Generated and overwritten on every `snapscript generate`:
 
-- `src/protocol/generated/protocol.ts`
-- `src/protocol/generated/manifest.json`
-- `src/protocol/generated/rpc.ts`
+- `src/generated/snapscript/protocol.ts`
+- `src/generated/snapscript/manifest.json`
+- `src/generated/snapscript/rpc.ts`
 - `src/systems/generated/server.ts`
 - `src/systems/generated/client.ts`
-- `protocol/snapscript.lock.json`
 
 Generated only if missing:
 
-- `src/protocol/logic/**/*.ts`
+- `src/rpc/server/**/*.ts`
+- `src/rpc/client/**/*.ts`
 - `src/systems/server/*.system.ts`
 - `src/systems/client/*.system.ts`
-- `src/world/server.ts`
-- `src/world/client.ts`
+- `src/create-server.ts`
+- `src/create-client.ts`
+- `src/transport/memory.ts`
 - `src/transport/README.md`
 
 Never generated after project creation unless explicitly requested:
@@ -136,7 +133,7 @@ The `.snap` file is the source of truth for:
 - commands
 - events
 - RPC channel policy
-- stable generated ids through the lock file
+- generated ids by declaration and field order
 
 It does not define:
 
@@ -146,6 +143,18 @@ It does not define:
 - ownership policy
 - app lifecycle
 - prediction/interpolation strategy
+
+Stable ids are deliberately simple:
+
+- component, entity, command, and event declaration order is the generated id source
+- field order inside a component, command, or event is the field id source
+- new fields should be appended
+- reordering fields or declarations is a breaking protocol change
+- deleting fields is a breaking protocol change
+- client/server protocol mismatch should be blocked before gameplay or during early handshake
+
+Generated projects do not use `snapscript.lock.json`. If a project needs schema evolution later,
+that should be an explicit future feature, not default hidden state.
 
 Systems are code because systems express behavior, ordering, and dependencies. Putting systems in
 IDL would make the protocol file responsible for runtime composition and would blur the framework
@@ -167,10 +176,10 @@ container, or project runtime object. It contains only data that belongs to the 
 The `world` argument is the stable object that gives logic access to replicated state and world APIs.
 The `ctx` argument is ephemeral and should not be stored.
 
-Example generated file:
+Generated RPC registry example:
 
 ```ts
-// src/protocol/generated/rpc.ts
+// src/generated/snapscript/rpc.ts
 // Code-generated by snapscript-cli. Do not edit.
 
 export function registerServerRpc(world: ServerWorld): void {
@@ -182,10 +191,10 @@ export function registerClientRpc(world: ClientWorld): void {
 }
 ```
 
-Example user file:
+User command logic:
 
 ```ts
-// src/protocol/logic/movement/move.command.ts
+// src/rpc/server/move.command.ts
 
 export function moveCommand(world: ServerWorld, ctx: RpcCtx<MovePayload>): void {
   const player = findControlledPlayer(world, ctx.sender);
@@ -197,6 +206,16 @@ export function moveCommand(world: ServerWorld, ctx: RpcCtx<MovePayload>): void 
     position.x.value += ctx.payload.dx;
     position.y.value += ctx.payload.dy;
   }
+}
+```
+
+User event logic:
+
+```ts
+// src/rpc/client/move-disabled.event.ts
+
+export function moveDisabledEvent(world: ClientWorld, ctx: RpcCtx<MoveDisabledPayload>): void {
+  showMoveDisabledFx(ctx.payload.disabled);
 }
 ```
 
@@ -220,8 +239,8 @@ Recommended default:
 export function moveCommand(world: ServerWorld, ctx: RpcCtx<MovePayload>): void;
 ```
 
-Projects that need dependency injection can create their own explicit object and pass it from their
-own bootstrap code. That is a project decision, not a generated default.
+Logger is still worth discussing separately. For now, logger stays in world options; generated user
+logic should not receive a broad `svc` object by default.
 
 ## Systems
 
@@ -234,28 +253,28 @@ Recommended shape:
 src/
   systems/
     server/
-      movement.system.ts
-      combat.system.ts
+      10-movement.system.ts
+      20-combat.system.ts
     client/
-      view.system.ts
-      prediction.system.ts
+      10-view.system.ts
+      20-prediction.system.ts
     generated/
       server.ts
       client.ts
 ```
 
 Every user system module exports a fixed `register(world)` function. The CLI scans
-`src/systems/server/*.system.ts` and `src/systems/client/*.system.ts`, then generates platform-neutral
-registry files. This gives users the ergonomics of automatic collection without requiring Vite
-`import.meta.glob` or a specific bundler.
+`src/systems/server/*.system.ts` and `src/systems/client/*.system.ts`, sorts by file name, then
+generates platform-neutral registry files. This gives users automatic collection without requiring
+Vite `import.meta.glob` or a specific bundler.
 
 Server system example:
 
 ```ts
-// src/systems/server/movement.system.ts
+// src/systems/server/10-movement.system.ts
 
 import type { ServerWorld } from "snapscript";
-import { Position, Velocity } from "../../protocol/generated/protocol";
+import { Position, Velocity } from "../../generated/snapscript/protocol";
 
 export function register(world: ServerWorld): void {
   world.system("movement.integrate", "update", (world, frame) => {
@@ -271,10 +290,10 @@ export function register(world: ServerWorld): void {
 Client system example:
 
 ```ts
-// src/systems/client/view.system.ts
+// src/systems/client/10-view.system.ts
 
 import type { ClientWorld } from "snapscript";
-import { Position } from "../../protocol/generated/protocol";
+import { Position } from "../../generated/snapscript/protocol";
 
 export function register(world: ClientWorld): void {
   world.system("view.collect", "postUpdate", (world) => {
@@ -292,31 +311,14 @@ Generated server registry:
 // Code-generated by snapscript-cli. Do not edit.
 
 import type { ServerWorld } from "snapscript";
-import * as combat from "../server/combat.system";
-import * as movement from "../server/movement.system";
+import * as combat from "../server/20-combat.system";
+import * as movement from "../server/10-movement.system";
 
 export function registerServerSystems(world: ServerWorld): void {
-  combat.register(world);
   movement.register(world);
+  combat.register(world);
 }
 ```
-
-Generated client registry:
-
-```ts
-// src/systems/generated/client.ts
-// Code-generated by snapscript-cli. Do not edit.
-
-import type { ClientWorld } from "snapscript";
-import * as view from "../client/view.system";
-
-export function registerClientSystems(world: ClientWorld): void {
-  view.register(world);
-}
-```
-
-System ordering is file-name sorted by default. If a project needs stronger ordering later, the CLI
-can introduce explicit order metadata without changing runtime concepts.
 
 System naming convention:
 
@@ -331,16 +333,18 @@ Recommended phase usage:
 - `postUpdate`: derive read models, emit side effects, cleanup
 - `network`: advanced server-side hook before runtime sends snapshots; avoid by default
 
-## Server And Client Bootstrap
+## Server And Client Composition
 
-World creation remains explicit and user-owned.
+World creation remains explicit and user-owned. Generated projects are platform-neutral core
+packages, so `src/create-server.ts` and `src/create-client.ts` are composition files, not process or
+browser entrypoints.
 
 Generated once:
 
 ```ts
-// src/world/server.ts
+// src/create-server.ts
 
-export function createProjectServerWorld(options: {
+export function createServer(options: {
   readonly transport: ServerTransport;
   readonly clock: Clock;
   readonly logger?: Logger;
@@ -360,9 +364,9 @@ export function createProjectServerWorld(options: {
 Generated once:
 
 ```ts
-// src/world/client.ts
+// src/create-client.ts
 
-export function createProjectClientWorld(options: {
+export function createClient(options: {
   readonly transport: ClientTransport;
   readonly clock: Clock;
   readonly logger?: Logger;
@@ -379,15 +383,158 @@ export function createProjectClientWorld(options: {
 }
 ```
 
+The generated package should export:
+
+```ts
+export { createServer } from "./create-server";
+export { createClient } from "./create-client";
+export * from "./generated/snapscript/protocol";
+```
+
 The public runtime vocabulary is server/client. `createServerWorld()` and `createClientWorld()` are
 the only world factories.
 
+## Platform Integration
+
+Platform projects depend on the generated core package:
+
+```txt
+node dedicated server
+browser client
+puerts client
+test harness
+        -> depends on my-game-core
+        -> depends on snapscript runtime
+```
+
+The core package owns:
+
+- protocol
+- generated bindings
+- RPC handlers
+- systems
+- server/client world composition
+- in-memory test transport
+
+The platform layer owns:
+
+- real network transport
+- clock source
+- tick loop
+- input bridge
+- renderer/engine entity bridge
+- process/app lifecycle
+- physics, persistence, accounts, matchmaking, deployment
+
+Node server platform:
+
+```ts
+import { createServer } from "@my-game/core";
+import { createNodeClock } from "./node-clock";
+import { createWsServerTransport } from "./ws-server-transport";
+
+const server = createServer({
+  transport: createWsServerTransport({ port: 3000 }),
+  clock: createNodeClock(),
+});
+
+setInterval(() => {
+  server.tick();
+}, 1000 / 30);
+```
+
+Browser client platform:
+
+```ts
+import { Move, createClient } from "@my-game/core";
+import { createBrowserClock } from "./browser-clock";
+import { createWebSocketTransport } from "./websocket-transport";
+import { renderWorld } from "./renderer";
+
+const client = createClient({
+  transport: createWebSocketTransport("ws://localhost:3000"),
+  clock: createBrowserClock(),
+});
+
+function frame() {
+  const input = readInput();
+  if (input.moveX !== 0 || input.moveY !== 0) {
+    client.send(Move, { dx: input.moveX, dy: input.moveY });
+  }
+  client.tick();
+  renderWorld(client);
+  requestAnimationFrame(frame);
+}
+```
+
+Puerts/engine client platform:
+
+```ts
+import { Move, createClient } from "@my-game/core";
+import { createEngineTransport } from "./engine-transport";
+import { createPuertsClock } from "./puerts-clock";
+import { syncWorldToEngine } from "./engine-entities";
+
+const client = createClient({
+  transport: createEngineTransport(),
+  clock: createPuertsClock(),
+});
+
+export function update(): void {
+  const input = readEngineInput();
+  if (input.hasMove) {
+    client.send(Move, { dx: input.dx, dy: input.dy });
+  }
+  client.tick();
+  syncWorldToEngine(client);
+}
+```
+
+Engine entity bridge:
+
+```ts
+import { Health, Position } from "@my-game/core";
+import type { ClientWorld } from "snapscript";
+
+export function syncWorldToEngine(world: ClientWorld): void {
+  world.each([Position, Health] as const, (entity, position, health) => {
+    const actor = getOrCreateActor(entity.id);
+    actor.setPosition(position.x.value, position.y.value);
+    actor.setHealth(health.hp.value);
+  });
+}
+```
+
+Client transport adapter:
+
+```ts
+export function createEngineTransport(): ClientTransport {
+  let onPacket: ((channel: ChannelName, bytes: Uint8Array) => void) | undefined;
+
+  EngineNetwork.onMessage((message) => {
+    onPacket?.(message.reliable ? "reliable" : "unreliable", message.bytes);
+  });
+
+  return {
+    send(channel, bytes) {
+      EngineNetwork.send({
+        reliable: channel === "reliable",
+        bytes,
+      });
+    },
+    onPacket(cb) {
+      onPacket = cb;
+    },
+  };
+}
+```
+
 ## Transport Boundary
 
-The generated project should not include a fake networking framework.
+The generated project should not include a fake production networking framework.
 
-`snapscript new` may include `src/transport/README.md` or a tiny in-memory test transport, but the
-default architecture should say clearly:
+`snapscript new` includes an in-memory test transport and `src/transport/README.md`, but the default
+architecture should say clearly:
 
 - production reliability belongs to the engine/platform layer
 - SnapScript adapters only move `Uint8Array` packets with channel labels
@@ -432,13 +579,17 @@ Confirmed defaults:
 - runtime package: `snapscript`
 - CLI package: `snapscript-cli`
 - CLI binary: `snapscript`
-- project init: `snapscript new <name>` generates a complete project
-- source schema: `protocol/main.snap`
-- generated runtime code: `src/protocol/generated/`
-- user RPC logic: `src/protocol/logic/`
+- project init: `snapscript new <name>` generates a platform-neutral game core package
+- source schema: root `game.snap`
+- no generated lock file
+- declaration order and field order are generated id sources
+- generated runtime code: `src/generated/snapscript/`
+- user RPC logic: `src/rpc/server/` and `src/rpc/client/`
 - user systems: `src/systems/server/` and `src/systems/client/`
+- system order: file-name sort
 - generated system registries: `src/systems/generated/server.ts` and `src/systems/generated/client.ts`
-- world bootstrap: `src/world/server.ts` and `src/world/client.ts`
+- world composition: `src/create-server.ts` and `src/create-client.ts`
+- default in-memory test transport, no production transport binding
 - no generated service context by default
 - no systems in `.snap`
 - generated files are overwritten
@@ -452,3 +603,5 @@ Items still needing implementation detail:
 - how stale logic/system files are reported
 - whether `generate` should format generated code
 - whether to include a minimal test fixture in generated projects
+- whether logger should stay only in world options or get a tiny generated helper
+- exact platform integration examples for puerts, Node, and browser packages

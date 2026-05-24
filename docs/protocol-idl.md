@@ -35,7 +35,7 @@ experience layer, not a replacement runtime.
 - Keep server/client world construction unchanged: `createServerWorld()` and `createClientWorld()`.
 - Keep transports outside the protocol IDL. The server/engine layer still owns reliability and connection
   lifecycle.
-- Generate stable component, RPC, and field ids.
+- Generate deterministic component, RPC, and field ids from declaration order.
 - Fail early during check/generate when schema definitions are inconsistent.
 - Keep replicated component snapshots on SnapScript's codec because it owns quantization, field
   masks, dirty tracking, and batched update semantics.
@@ -50,53 +50,19 @@ experience layer, not a replacement runtime.
 - No direct dependency on decorators, reflection metadata, `eval`, dynamic import, or runtime parser
   features that make puerts portability harder.
 
-## Stable IDs
+## Deterministic IDs
 
 Protocol versioning and compatibility policy are intentionally deferred. The first requirement is
-stable ids that make mismatches obvious and prevent accidental reorder bugs.
-
-The IDL generator should assign ids using an accompanying lock file:
-
-```txt
-schema.snap
-snapscript.lock.json
-```
+deterministic ids that are obvious from the `.snap` file.
 
 Rules:
 
-- Users may omit ids in `.snap`.
-- On first generation, ids are allocated monotonically.
-- On later generations, existing ids are reused from `snapscript.lock.json`.
-- New definitions receive `maxId + 1` within their namespace.
-- Removed ids are not reused.
-- Reordering declarations does not change generated ids.
-- A user-provided explicit id is allowed only when it does not conflict with the lock.
-- Field ids are stable within their owner definition.
-
-The lock file should track at least:
-
-```json
-{
-  "components": {
-    "Position": {
-      "id": 1,
-      "fields": {
-        "x": 1,
-        "y": 2
-      }
-    }
-  },
-  "commands": {
-    "Move": {
-      "id": 1,
-      "fields": {
-        "dx": 1,
-        "dy": 2
-      }
-    }
-  }
-}
-```
+- Component, entity, command, and event declaration order is the generated id source.
+- Field order inside a component, command, or event is the field id source.
+- New fields should be appended.
+- Reordering fields or declarations is a breaking protocol change.
+- Deleting fields is a breaking protocol change.
+- The generated project should not maintain a separate `snapscript.lock.json`.
 
 Server/client protocol mismatches should be discovered before gameplay runs, preferably by generated
 manifest checks in build, CI, or startup bootstrap. The runtime protocol layer should not grow a
@@ -197,7 +163,6 @@ The first generated output should include:
 - typed command/event exports
 - RPC binding helpers
 - `manifest.json`
-- `snapscript.lock.json`
 
 ## RPC Bindings
 
@@ -225,7 +190,7 @@ payload)`, and `clientWorld.on(Event, handler)` APIs remain available.
 ## Open Questions
 
 - Exact `.snap` syntax and naming conventions.
-- Whether explicit ids are allowed in source, or only in the lock file.
+- Whether explicit ids should ever be supported as an advanced source-level escape hatch.
 - Whether entities should support aliases only, or direct component shorthand too.
 - Whether generated RPC bindings should live under `rpc.commands` / `rpc.events` or a flatter shape.
 - Whether handler stubs are generated once, overwritten, or protected by a separate user file pattern.

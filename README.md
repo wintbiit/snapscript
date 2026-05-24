@@ -291,7 +291,9 @@ snapscript check examples/protocol/example.snap
 snapscript generate examples/protocol/example.snap
 ```
 
-`generate` writes `generated/protocol.ts`, `generated/manifest.json`, and `snapscript.lock.json` next to the input by default. The lock file keeps component, entity, RPC, and field ids stable when definitions are reordered. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/example.snap](examples/protocol/example.snap).
+`generate` writes generated TypeScript protocol/RPC bindings and a manifest. The project-style target
+uses `.snap` declaration order and field order as the generated id source; reordering is a breaking
+protocol change. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/example.snap](examples/protocol/example.snap).
 
 ## RPC
 
