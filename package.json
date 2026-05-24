@@ -22,9 +22,11 @@
     "build": "tsdown",
     "example:ecs:build": "pnpm --dir examples/ecs build",
     "example:ecs:dev": "pnpm --dir examples/ecs dev",
+    "example:protocol:build": "pnpm build && pnpm --dir examples/protocol build",
+    "example:protocol:generate": "pnpm build && pnpm --dir examples/protocol generate",
     "example:simple:build": "pnpm --dir examples/simple build",
     "example:simple:dev": "pnpm --dir examples/simple dev",
-    "test:examples": "pnpm example:simple:build && pnpm example:ecs:build",
+    "test:examples": "pnpm example:protocol:build && pnpm example:simple:build && pnpm example:ecs:build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

@@ -1,0 +1,17 @@
+{
+  "name": "@snapscript/example-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "snapscript generate example.snap",
+    "check": "snapscript check example.snap",
+    "build": "pnpm generate && tsc --noEmit"
+  },
+  "dependencies": {
+    "snapscript": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

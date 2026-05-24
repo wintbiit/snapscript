@@ -130,12 +130,14 @@ clientWorld.onSnapshot((world, snapshot) => {
 ## Run The Examples
 
 ```sh
+pnpm example:protocol:build
 pnpm example:simple:dev
 pnpm example:ecs:dev
 ```
 
 Open `/host` and `/client` in separate browser tabs. The examples show the intended layering:
 
+- `examples/protocol` shows `.snap` check/generate, stable lock ids, generated protocol exports, and typed RPC helpers
 - host/client worlds are created directly by the host app
 - transports only deliver `Uint8Array` packets and channel labels
 - commands express client intent

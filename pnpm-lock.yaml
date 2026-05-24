@@ -56,6 +56,16 @@ importers:
         specifier: ^8.18.0
         version: 8.21.0
 
+  examples/protocol:
+    dependencies:
+      snapscript:
+        specifier: workspace:*
+        version: link:../..
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   examples/simple:
     dependencies:
       snapscript:
