@@ -1,0 +1,21 @@
+{
+  "name": "snapscript",
+  "version": "0.0.0",
+  "description": "Platform-agnostic TypeScript network synchronization framework.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  }
+}

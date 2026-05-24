@@ -13,7 +13,7 @@ import {
   vec2q,
   vec3q,
   type ComponentSchema,
-} from "../src/index";
+} from "../packages/snapscript/src/index";
 import { createTestHostWorld, testProtocol } from "./helpers";
 
 describe("schema", () => {

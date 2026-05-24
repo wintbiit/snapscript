@@ -12,6 +12,7 @@
     "snapscript": "workspace:*"
   },
   "devDependencies": {
+    "snapscript-cli": "workspace:*",
     "typescript": "^5.9.3"
   }
 }

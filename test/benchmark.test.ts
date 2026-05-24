@@ -10,15 +10,15 @@ import {
   type ComponentSchema,
   type HostTransport,
   type PeerRef,
-} from "../src/index";
-import { createRegistry } from "../src/registry/index";
-import { applySnapshot, encodeDirty, encodeDirtyBatched } from "../src/sync/index";
-import type { ComponentRecord } from "../src/world/records";
+} from "../packages/snapscript/src/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { applySnapshot, encodeDirty, encodeDirtyBatched } from "../packages/snapscript/src/sync/index";
+import type { ComponentRecord } from "../packages/snapscript/src/world/records";
 import {
   MapComponentStorage,
   SparseSetComponentStorage,
   type ComponentStorage,
-} from "../src/world/storage";
+} from "../packages/snapscript/src/world/storage";
 import { createTestClientWorld, createTestHostWorld } from "./helpers";
 
 const Position = defineComponent("BenchPosition", {

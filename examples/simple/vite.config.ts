@@ -45,7 +45,7 @@ export default defineConfig({
   plugins: [vue(), syncRelay()],
   resolve: {
     alias: {
-      snapscript: fileURLToPath(new URL("../../src/index.ts", import.meta.url)),
+      snapscript: fileURLToPath(new URL("../../packages/snapscript/src/index.ts", import.meta.url)),
     },
   },
 });

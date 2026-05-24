@@ -13,12 +13,12 @@ import {
   type ComponentSchema,
   type HostTransport,
   type PeerRef,
-} from "../src/index";
-import { createRegistry } from "../src/registry/index";
-import { createSyncHost } from "../src/runtime/index";
-import { applySnapshot, encodeDirty } from "../src/sync/index";
-import type { ComponentRecord } from "../src/world/records";
-import { SparseSetComponentStorage } from "../src/world/storage";
+} from "../packages/snapscript/src/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { createSyncHost } from "../packages/snapscript/src/runtime/index";
+import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
+import type { ComponentRecord } from "../packages/snapscript/src/world/records";
+import { SparseSetComponentStorage } from "../packages/snapscript/src/world/storage";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
 function clock(): Clock {

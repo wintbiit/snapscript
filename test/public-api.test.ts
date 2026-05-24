@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import * as SnapScript from "../src/index";
+import * as SnapScript from "../packages/snapscript/src/index";
 
 const expectedValueExports = [
   "ServerPeerId",
@@ -79,7 +79,7 @@ describe("public entrypoint", () => {
   });
 
   it("publishes only the root package entrypoint", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+    const packageJson = JSON.parse(readFileSync("packages/snapscript/package.json", "utf8")) as {
       readonly exports?: unknown;
     };
     expect(packageJson.exports).toEqual({
@@ -91,7 +91,7 @@ describe("public entrypoint", () => {
   });
 
   it("does not re-export internal implementation modules from the source entrypoint", () => {
-    const entrypoint = readFileSync("src/index.ts", "utf8");
+    const entrypoint = readFileSync("packages/snapscript/src/index.ts", "utf8");
     for (const fragment of forbiddenEntrypointFragments) {
       expect(entrypoint).not.toContain(fragment);
     }

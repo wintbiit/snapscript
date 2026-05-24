@@ -13,10 +13,10 @@ import {
   type Logger,
   type HostTransport,
   ServerPeerId,
-} from "../src/index";
-import { createRegistry } from "../src/registry/index";
-import { createSyncClient, createSyncHost } from "../src/runtime/index";
-import { BitReader } from "../src/binary/index";
+} from "../packages/snapscript/src/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { createSyncClient, createSyncHost } from "../packages/snapscript/src/runtime/index";
+import { BitReader } from "../packages/snapscript/src/binary/index";
 import {
   applySnapshot,
   ControlCapability,
@@ -24,8 +24,8 @@ import {
   decodeControl,
   encodeControl,
   SnapshotOp,
-} from "../src/sync/index";
-import { worldInternals } from "../src/world/internals";
+} from "../packages/snapscript/src/sync/index";
+import { worldInternals } from "../packages/snapscript/src/world/internals";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
 class ManualTransport implements ClientTransport, HostTransport {

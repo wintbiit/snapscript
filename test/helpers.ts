@@ -12,7 +12,7 @@ import {
   type PeerRef,
   type PrefabDefinition,
   type ProtocolDefinition,
-} from "../src/index";
+} from "../packages/snapscript/src/index";
 
 class NullHostTransport implements HostTransport {
   send(_peer: PeerRef, _channel: ChannelName, _bytes: Uint8Array): void {}

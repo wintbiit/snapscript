@@ -17,7 +17,7 @@ import {
   varu32,
   vec2q,
   vec3q,
-} from "../src/index";
+} from "../packages/snapscript/src/index";
 import {
   BitReader,
   BitWriter,
@@ -25,8 +25,8 @@ import {
   ByteWriter,
   readVarUint,
   writeVarUint,
-} from "../src/binary/index";
-import { codecForField } from "../src/schema/fields";
+} from "../packages/snapscript/src/binary/index";
+import { codecForField } from "../packages/snapscript/src/schema/fields";
 
 describe("binary runtime", () => {
   it("round-trips varuint values", () => {

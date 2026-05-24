@@ -10,8 +10,8 @@ import {
   type HostWorld,
   type PeerRef,
   u16,
-} from "../src/index";
-import { encodeDirty } from "../src/sync/index";
+} from "../packages/snapscript/src/index";
+import { encodeDirty } from "../packages/snapscript/src/sync/index";
 
 interface MemorySample {
   readonly scenario: string;

@@ -19,44 +19,44 @@ import {
   type PeerId,
   type PeerRef,
   type ReplicatedStateReader,
-} from "../src/index";
+} from "../packages/snapscript/src/index";
 // @ts-expect-error World is intentionally not part of the public entrypoint.
-import type { World } from "../src/index";
+import type { World } from "../packages/snapscript/src/index";
 // @ts-expect-error SnapScript does not expose a local-only world factory.
-import { createWorld } from "../src/index";
-import { HostWorld as HostWorldValue } from "../src/index";
+import { createWorld } from "../packages/snapscript/src/index";
+import { HostWorld as HostWorldValue } from "../packages/snapscript/src/index";
 // @ts-expect-error low-level sync runtime is internal; use createHostWorld/createClientWorld.
-import { createSyncHost } from "../src/index";
+import { createSyncHost } from "../packages/snapscript/src/index";
 // @ts-expect-error snapshot codec helpers are internal to the world runtime.
-import { encodeDirty } from "../src/index";
+import { encodeDirty } from "../packages/snapscript/src/index";
 // @ts-expect-error rpc packet helpers are internal to the world runtime.
-import { encodeRpc } from "../src/index";
+import { encodeRpc } from "../packages/snapscript/src/index";
 // @ts-expect-error engine bridge abstractions are host-owned, not framework API.
-import type { EngineBridge } from "../src/index";
+import type { EngineBridge } from "../packages/snapscript/src/index";
 // @ts-expect-error field codecs are internal; use built-in field helpers.
-import type { FieldCodec } from "../src/index";
+import type { FieldCodec } from "../packages/snapscript/src/index";
 // @ts-expect-error rpc codecs are internal; use command/event APIs.
-import type { RpcCodec } from "../src/index";
+import type { RpcCodec } from "../packages/snapscript/src/index";
 // @ts-expect-error raw registries are internal; use defineProtocol().
-import { createRegistry } from "../src/index";
+import { createRegistry } from "../packages/snapscript/src/index";
 // @ts-expect-error raw registry types are internal; use ProtocolDefinition.
-import type { RegistryLike } from "../src/index";
+import type { RegistryLike } from "../packages/snapscript/src/index";
 // @ts-expect-error protocol registry is internal; use defineProtocol() and world APIs.
-import type { ProtocolRegistry } from "../src/index";
+import type { ProtocolRegistry } from "../packages/snapscript/src/index";
 // @ts-expect-error binary readers/writers are internal codec machinery.
-import { BitReader } from "../src/index";
+import { BitReader } from "../packages/snapscript/src/index";
 // @ts-expect-error global schema lookup is internal; use protocol/world APIs.
-import { getSchemaById } from "../src/index";
+import { getSchemaById } from "../packages/snapscript/src/index";
 // @ts-expect-error use explicit ClientTransport or HostTransport instead.
-import type { Transport } from "../src/index";
+import type { Transport } from "../packages/snapscript/src/index";
 // @ts-expect-error component storage is an internal implementation detail.
-import type { ComponentStorage } from "../src/index";
+import type { ComponentStorage } from "../packages/snapscript/src/index";
 // @ts-expect-error map storage exists only for internal benchmarks.
-import { MapComponentStorage } from "../src/index";
+import { MapComponentStorage } from "../packages/snapscript/src/index";
 // @ts-expect-error sparse storage is selected internally by the world runtime.
-import { SparseSetComponentStorage } from "../src/index";
+import { SparseSetComponentStorage } from "../packages/snapscript/src/index";
 // @ts-expect-error storage options are internal tuning details.
-import type { SparseSetComponentStorageOptions } from "../src/index";
+import type { SparseSetComponentStorageOptions } from "../packages/snapscript/src/index";
 import { describe, it } from "vitest";
 
 const transport: ClientTransport = {

@@ -533,7 +533,7 @@ pnpm test:examples
 After `pnpm build`, audit the generated public declaration surface if you touch exports:
 
 ```sh
-rg -n "createWorld|declare class World|BinaryReader|BinaryWriter|ComponentStorage|SparseSetComponentStorage|createSyncHost|createSyncClient" dist/index.d.mts
+rg -n "createWorld|declare class World|BinaryReader|BinaryWriter|ComponentStorage|SparseSetComponentStorage|createSyncHost|createSyncClient" packages/snapscript/dist/index.d.mts
 ```
 
 The command should not find those internal names.

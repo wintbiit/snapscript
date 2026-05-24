@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { defineEntity, qf32, u16, vec2q } from "../src/index";
-import { createRegistry } from "../src/registry/index";
-import { applySnapshot, encodeDirty } from "../src/sync/index";
-import { worldInternals } from "../src/world/internals";
+import { defineEntity, qf32, u16, vec2q } from "../packages/snapscript/src/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
+import { worldInternals } from "../packages/snapscript/src/world/internals";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
 describe("world and NetRef", () => {

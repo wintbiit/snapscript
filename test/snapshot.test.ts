@@ -4,17 +4,17 @@ import {
   defineEntity,
   u16,
   angle16,
-} from "../src/index";
-import { BitReader, BitWriter, type FieldCodec } from "../src/binary/index";
-import { createRegistry } from "../src/registry/index";
+} from "../packages/snapscript/src/index";
+import { BitReader, BitWriter, type FieldCodec } from "../packages/snapscript/src/binary/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
 import {
   applySnapshot,
   encodeDirty,
   encodeDirtyBatched,
   encodeFullSnapshot,
   SnapshotOp,
-} from "../src/sync/index";
-import { worldInternals } from "../src/world/internals";
+} from "../packages/snapscript/src/sync/index";
+import { worldInternals } from "../packages/snapscript/src/world/internals";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
 describe("snapshot sync", () => {

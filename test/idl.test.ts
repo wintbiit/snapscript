@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkSnap, generateSnap } from "../src/idl/index";
+import { checkSnap, generateSnap } from "../packages/snapscript-cli/src/idl/index";
 
 describe("snap idl", () => {
   it("checks and generates the example protocol", () => {

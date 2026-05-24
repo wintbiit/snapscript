@@ -16,7 +16,7 @@ import {
   type Clock,
   type HostTransport,
   type PeerRef,
-} from "../src/index";
+} from "../packages/snapscript/src/index";
 
 class ManualTransport implements ClientTransport, HostTransport {
   peer?: ManualTransport;

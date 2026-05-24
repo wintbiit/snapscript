@@ -9,7 +9,7 @@
     "noEmit": true,
     "types": ["node"],
     "paths": {
-      "snapscript": ["../../src/index.ts"]
+      "snapscript": ["../../packages/snapscript/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]

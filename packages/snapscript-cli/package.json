@@ -1,0 +1,25 @@
+{
+  "name": "snapscript-cli",
+  "version": "0.0.0",
+  "description": "SnapScript project and protocol generation CLI.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "snapscript": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "peggy": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "snapscript": "workspace:*"
+  }
+}

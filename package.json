@@ -1,25 +1,13 @@
 {
-  "name": "snapscript",
+  "name": "snapscript-monorepo",
   "version": "0.0.0",
-  "description": "Platform-agnostic TypeScript network synchronization framework.",
+  "description": "SnapScript workspace.",
   "license": "GPL-3.0-only",
   "type": "module",
   "private": true,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs"
-    }
-  },
-  "bin": {
-    "snapscript": "./dist/cli.mjs"
-  },
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "bench": "vitest run test/benchmark.test.ts test/benchmark-examples.test.ts test/benchmark-memory.test.ts --reporter=verbose",
-    "build": "tsdown",
+    "build": "pnpm --filter snapscript build && pnpm --filter snapscript-cli build",
     "example:ecs:build": "pnpm --dir examples/ecs build",
     "example:ecs:dev": "pnpm --dir examples/ecs dev",
     "example:protocol:build": "pnpm build && pnpm --dir examples/protocol build",
@@ -36,8 +24,5 @@
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   },
-  "packageManager": "pnpm@10.32.1+sha512.a706938f0e89ac1456b6563eab4edf1d1faf3368d1191fc5c59790e96dc918e4456ab2e67d613de1043d2e8c81f87303e6b40d4ffeca9df15ef1ad567348f2be",
-  "dependencies": {
-    "peggy": "^5.1.0"
-  }
+  "packageManager": "pnpm@10.32.1+sha512.a706938f0e89ac1456b6563eab4edf1d1faf3368d1191fc5c59790e96dc918e4456ab2e67d613de1043d2e8c81f87303e6b40d4ffeca9df15ef1ad567348f2be"
 }

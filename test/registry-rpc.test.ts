@@ -7,10 +7,10 @@ import {
   qf32,
   u16,
   varu32,
-} from "../src/index";
-import { createRegistry } from "../src/registry/index";
-import { decodeRpc, encodeRpc } from "../src/rpc/index";
-import { applySnapshot, encodeFullSnapshot } from "../src/sync/index";
+} from "../packages/snapscript/src/index";
+import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { decodeRpc, encodeRpc } from "../packages/snapscript/src/rpc/index";
+import { applySnapshot, encodeFullSnapshot } from "../packages/snapscript/src/sync/index";
 import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
 
 describe("registry and rpc packets", () => {
