@@ -31,6 +31,24 @@ describe("schema", () => {
     expect(PlayerState.fullMask).toBe(0b111);
   });
 
+  it("supports explicit field ids for generated definitions", () => {
+    const Position = defineComponent("ExplicitFieldIdPosition", {
+      x: u8(0),
+      y: u8(0),
+    }, { fieldIds: { x: 3, y: 7 } });
+
+    expect(Position.fields.x.fieldId).toBe(3);
+    expect(Position.fields.y.fieldId).toBe(7);
+    expect(Position.fields.x.dirtyBit).toBe(1 << 3);
+    expect(Position.fullMask).toBe((1 << 3) | (1 << 7));
+    expect(() =>
+      defineComponent("DuplicateExplicitFieldIds", { a: u8(0), b: u8(0) }, { fieldIds: { a: 1, b: 1 } }),
+    ).toThrow(/field id 1 is used more than once/);
+    expect(() =>
+      defineComponent("OutOfRangeExplicitFieldId", { a: u8(0) }, { fieldIds: { a: 32 } }),
+    ).toThrow(/id must be an integer in \[0, 31\]/);
+  });
+
   it("rejects schemas with more than 32 fields", () => {
     const fields = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`f${index}`, u8(0)]));
     expect(() => defineEntity("TooManyFields", fields)).toThrow(/at most 32/);

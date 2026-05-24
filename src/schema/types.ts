@@ -22,6 +22,7 @@ export function isFieldDefinition(value: unknown): value is FieldDefinition<unkn
 
 export interface EntityOptions {
   readonly id?: number;
+  readonly fieldIds?: Record<string, number>;
   readonly metadata?: Record<string, unknown>;
 }
 

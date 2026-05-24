@@ -89,8 +89,8 @@ const world = createClientWorld({
   },
 });
 
-world.on(DamageEvent, (payload) => {
-  console.log(JSON.stringify({ event: "DamageEvent", amount: payload.amount }));
+world.on(DamageEvent, (ctx) => {
+  console.log(JSON.stringify({ event: "DamageEvent", amount: ctx.payload.amount }));
 });
 
 let sentDamage = false;

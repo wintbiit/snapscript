@@ -12,6 +12,7 @@ import {
   type PeerRef,
   type Logger,
   type HostTransport,
+  ServerPeerId,
 } from "../src/index";
 import { createRegistry } from "../src/registry/index";
 import { createSyncClient, createSyncHost } from "../src/runtime/index";
@@ -216,8 +217,8 @@ describe("sync runtime", () => {
       clock: clock(),
       registry,
     });
-    host.on(Move, (payload) => {
-      hostWorld.get(player, PlayerState)!.x.value += payload.dx;
+    host.on(Move, (ctx) => {
+      hostWorld.get(player, PlayerState)!.x.value += ctx.payload.dx;
     });
     client.start();
 
@@ -225,6 +226,85 @@ describe("sync runtime", () => {
     host.update();
 
     expect(clientWorld.get(player.id, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
+  });
+
+  it("assigns peer ids and exposes them through RPC ctx", () => {
+    const Move = defineCommand("RuntimePeerCtxMove", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const Damage = defineEvent("RuntimePeerCtxDamage", {
+      amount: u16(0),
+    });
+    const registry = createRegistry().registerRpc(Move).registerRpc(Damage);
+    const protocol = testProtocol(Move, Damage);
+    const hostWorld = createTestHostWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const [hostTransport, clientTransport] = pair();
+    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+    });
+    let commandSender = ServerPeerId;
+    let eventSender = -1;
+    host.on(Move, (ctx) => {
+      commandSender = ctx.sender;
+    });
+    client.on(Damage, (ctx) => {
+      eventSender = ctx.sender;
+    });
+
+    client.start();
+    client.send(Move, { dx: 0.5 });
+    host.sendTo(1, Damage, { amount: 7 });
+
+    expect(client.peerId()).toBe(1);
+    expect(commandSender).toBe(1);
+    expect(eventSender).toBe(ServerPeerId);
+    expect(() => host.sendTo(99, Damage, { amount: 1 })).toThrow(/unknown peer 99/);
+  });
+
+  it("syncs ownership in full snapshots and dirty structural updates", () => {
+    const Player = defineEntity("RuntimeOwnedPlayer", {
+      hp: u16(100),
+    });
+    const PlayerState = Player.component;
+    const registry = createRegistry().registerComponent(PlayerState);
+    const protocol = testProtocol(Player);
+    const hostWorld = createTestHostWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const player = hostWorld.spawn(Player);
+    const [hostTransport, clientTransport] = pair();
+    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+    });
+
+    hostWorld.setOwner(player, 1);
+    client.start();
+
+    expect(client.peerId()).toBe(1);
+    expect(clientWorld.ownerOf(player.id)).toBe(1);
+    expect(clientWorld.get(player.id, PlayerState)).toBeDefined();
+
+    hostWorld.clearOwner(player);
+    host.update();
+    expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
+    expect(hostTransport.packets.at(-1)).toBeDefined();
+
+    hostWorld.setOwner(player, 1);
+    host.update();
+    expect(clientWorld.ownerOf(player.id)).toBe(1);
+
+    hostWorld.destroy(player);
+    host.update();
+    expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
+    expect(clientWorld.get(player.id, PlayerState)).toBeUndefined();
   });
 
   it("isolates host command handler failures", () => {
@@ -286,8 +366,8 @@ describe("sync runtime", () => {
       registry,
     });
     let received = 0;
-    client.on(Damage, (payload) => {
-      received = payload.amount;
+    client.on(Damage, (ctx) => {
+      received = ctx.payload.amount;
     });
 
     host.broadcast(Damage, { entityId: 1, amount: 10 });
@@ -319,8 +399,8 @@ describe("sync runtime", () => {
     client.on(Damage, () => {
       throw new Error("damage failed");
     });
-    client.on(Damage, (payload) => {
-      received = payload.amount;
+    client.on(Damage, (ctx) => {
+      received = ctx.payload.amount;
     });
 
     host.broadcast(Damage, { amount: 7 });
@@ -399,7 +479,7 @@ describe("sync runtime", () => {
     const hostWorld = createTestHostWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
     const player = hostWorld.spawn(Player);
-    const visible = new Map<PeerRef, boolean>();
+    const visible = new Map<number, boolean>();
     const peerA = "peer-a";
     const peerB = "peer-b";
     const transport = new PeerHostTransport();
@@ -413,9 +493,9 @@ describe("sync runtime", () => {
     host.update();
 
     transport.receive(peerA, "reliable", encodeControl(ControlType.Hello, 1));
-    expect(transport.sent.filter((packet) => packet.peer === peerA)).toHaveLength(1);
+    expect(transport.sent.filter((packet) => packet.peer === peerA)).toHaveLength(2);
     expect(transport.sent.filter((packet) => packet.peer === peerB)).toHaveLength(0);
-    applySnapshot(clientWorld, transport.sent[0]!.bytes, registry);
+    applySnapshot(clientWorld, transport.sent[1]!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(100);
 
     hostWorld.get(player, PlayerState)!.hp.value = 90;
@@ -426,7 +506,7 @@ describe("sync runtime", () => {
     applySnapshot(clientWorld, update.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(90);
 
-    visible.set(peerA, false);
+    visible.set(1, false);
     host.update();
     const removal = transport.sent.at(-1)!;
     expect(removal.channel).toBe("reliable");
@@ -452,7 +532,7 @@ describe("sync runtime", () => {
       transport,
       clock: clock(),
       registry,
-      isVisible: (peer) => peer === peerA,
+      isVisible: (peerId) => peerId === 1,
     });
 
     transport.receive(peerA, "reliable", encodeControl(ControlType.Hello, 1));
@@ -483,7 +563,7 @@ describe("sync runtime", () => {
     const clientWorld = createTestClientWorld(protocol);
     const player = hostWorld.spawn(Player);
     const peer = "peer";
-    const visible = new Map<PeerRef, boolean>();
+    const visible = new Map<number, boolean>();
     const transport = new PeerHostTransport();
     const host = createSyncHost({
       world: hostWorld,
@@ -497,12 +577,12 @@ describe("sync runtime", () => {
     applySnapshot(clientWorld, transport.sent.at(-1)!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(100);
 
-    visible.set(peer, false);
+    visible.set(1, false);
     host.sendFullSnapshot(peer);
     applySnapshot(clientWorld, transport.sent.at(-1)!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)).toBeUndefined();
 
-    visible.set(peer, true);
+    visible.set(1, true);
     host.sendFullSnapshot(peer);
     applySnapshot(clientWorld, transport.sent.at(-1)!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(100);

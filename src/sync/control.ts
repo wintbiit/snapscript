@@ -4,6 +4,7 @@ import { MessageType } from "./message";
 export enum ControlType {
   Hello = 1,
   FullSnapshotRequest = 2,
+  PeerAssigned = 3,
 }
 
 export enum ControlCapability {
@@ -14,14 +15,22 @@ export interface ControlMessage {
   readonly tick: number;
   readonly type: ControlType;
   readonly capabilities: number;
+  readonly peerId?: number;
 }
 
-export function encodeControl(type: ControlType, tick: number, capabilities = 0): Uint8Array {
+export function encodeControl(
+  type: ControlType,
+  tick: number,
+  capabilities = 0,
+  peerId?: number,
+): Uint8Array {
   const writer = new BitWriter();
   writer.writeU8(MessageType.Control);
   writer.writeU32(tick);
   writer.writeU8(type);
-  if (capabilities !== 0) {
+  if (type === ControlType.PeerAssigned) {
+    writer.writeVarUint(peerId ?? 0);
+  } else if (capabilities !== 0) {
     writer.writeVarUint(capabilities);
   }
   return writer.finish();
@@ -36,6 +45,14 @@ export function decodeControl(bytes: Uint8Array): ControlMessage {
 
   const tick = reader.readU32();
   const type = reader.readU8() as ControlType;
+  if (type === ControlType.PeerAssigned) {
+    return {
+      tick,
+      type,
+      capabilities: 0,
+      peerId: reader.readVarUint(),
+    };
+  }
   const capabilities = reader.remaining() === 0 ? 0 : reader.readVarUint();
 
   return {

@@ -67,6 +67,22 @@ describe("registry and rpc packets", () => {
     expect(decoded.payload.dy).toBeCloseTo(-0.5, 2);
   });
 
+  it("supports explicit rpc field ids for generated definitions", () => {
+    const Move = defineCommand("RpcExplicitFieldIds", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+      dy: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    }, { fieldIds: { dx: 5, dy: 9 } });
+
+    expect(Move.fields.dx.fieldId).toBe(5);
+    expect(Move.fields.dy.fieldId).toBe(9);
+    expect(() =>
+      defineEvent("RpcDuplicateExplicitFieldIds", { a: u16(0), b: u16(0) }, { fieldIds: { a: 2, b: 2 } }),
+    ).toThrow(/field id 2 is used more than once/);
+    expect(() =>
+      defineCommand("RpcOutOfRangeExplicitFieldId", { a: u16(0) }, { fieldIds: { a: 32 } }),
+    ).toThrow(/id must be an integer in \[0, 31\]/);
+  });
+
   it("uses default rpc field values when payload is omitted", () => {
     const Move = defineCommand("RpcDefaultPayload", {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0.25 }),

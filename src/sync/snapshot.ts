@@ -18,10 +18,12 @@ export enum SnapshotOp {
   RemoveComponent = 4,
   DestroyEntity = 5,
   BatchUpdateComponent = 6,
+  SetNetwork = 7,
 }
 
 export interface SnapshotWriteOps {
   readonly created?: readonly number[];
+  readonly network?: readonly { readonly entityId: number; readonly owner?: number }[];
   readonly added?: readonly { readonly entityId: number; readonly componentId: number }[];
   readonly updated?: readonly {
     readonly entityId: number;
@@ -42,6 +44,7 @@ export function encodeFullSnapshot(world: SnapshotWorld, tick: number): Uint8Arr
   const internals = worldInternals(world);
   return encodeSnapshotOps(world, tick, {
     created: internals.getEntityIds(),
+    network: internals.getNetworkOwners(),
     added: internals.getRecords().map((record) => ({
       entityId: record.entityId,
       componentId: record.schema.schemaId,
@@ -100,6 +103,7 @@ function writeSnapshotOps(
 ): void {
   const internals = worldInternals(world);
   const created = ops.created ?? [];
+  const network = ops.network ?? [];
   const added = ops.added ?? [];
   const updated = ops.updated ?? [];
   const removed = ops.removed ?? [];
@@ -108,10 +112,11 @@ function writeSnapshotOps(
   writeSnapshotHeader(
     writer,
     tick,
-    created.length + added.length + updated.length + removed.length + destroyed.length,
+    created.length + network.length + added.length + updated.length + removed.length + destroyed.length,
   );
 
   writeCreateAndAddOps(writer, internals, created, added);
+  writeNetworkOps(writer, internals, network);
 
   for (const { entityId, componentId, fieldMask } of updated) {
     writeUpdateOp(writer, internals, entityId, componentId, fieldMask);
@@ -128,6 +133,7 @@ function writeSnapshotOpsBatched(
 ): void {
   const internals = worldInternals(world);
   const created = ops.created ?? [];
+  const network = ops.network ?? [];
   const added = ops.added ?? [];
   const updated = ops.updated ?? [];
   const removed = ops.removed ?? [];
@@ -138,12 +144,13 @@ function writeSnapshotOpsBatched(
   writeSnapshotHeader(
     writer,
     tick,
-    created.length + added.length + removed.length + destroyed.length +
+    created.length + network.length + added.length + removed.length + destroyed.length +
       singleUpdates.length +
       grouped.batchGroups.length,
   );
 
   writeCreateAndAddOps(writer, internals, created, added);
+  writeNetworkOps(writer, internals, network);
 
   for (const { entityId, componentId, fieldMask } of singleUpdates) {
     writeUpdateOp(writer, internals, entityId, componentId, fieldMask);
@@ -154,6 +161,19 @@ function writeSnapshotOpsBatched(
   }
 
   writeRemoveAndDestroyOps(writer, removed, destroyed);
+}
+
+function writeNetworkOps(
+  writer: BitWriter,
+  internals: ReturnType<typeof worldInternals>,
+  network: readonly { readonly entityId: number; readonly owner?: number }[],
+): void {
+  for (const { entityId, owner } of network) {
+    writer.writeVarUint(entityId);
+    writer.writeVarUint(0);
+    writer.writeU8(SnapshotOp.SetNetwork);
+    writer.writeVarUint(owner ?? internals.getOwner(entityId));
+  }
 }
 
 function writeSnapshotHeader(writer: BitWriter, tick: number, opCount: number): void {
@@ -402,6 +422,7 @@ export function splitDirtyOps(dirty: DirtyOps): {
   return {
     structural: {
       created: dirty.created,
+      network: dirty.network,
       added: dirty.added,
       removed: dirty.removed,
       destroyed: dirty.destroyed,
@@ -415,6 +436,7 @@ export function splitDirtyOps(dirty: DirtyOps): {
 export function hasSnapshotOps(ops: SnapshotWriteOps): boolean {
   return (
     (ops.created?.length ?? 0) +
+      (ops.network?.length ?? 0) +
       (ops.added?.length ?? 0) +
       (ops.updated?.length ?? 0) +
       (ops.removed?.length ?? 0) +
@@ -447,6 +469,11 @@ export function applySnapshot(world: SnapshotWorld, bytes: Uint8Array, registry:
 
     if (op === SnapshotOp.DestroyEntity) {
       internals.applyDestroyFromRemote(entityId);
+      continue;
+    }
+
+    if (op === SnapshotOp.SetNetwork) {
+      internals.applyNetworkFromRemote(entityId, reader.readVarUint());
       continue;
     }
 

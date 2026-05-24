@@ -1,5 +1,6 @@
 export interface DirtySnapshot {
   readonly created: readonly number[];
+  readonly network: readonly DirtyNetwork[];
   readonly added: readonly DirtyComponent[];
   readonly updated: readonly DirtyUpdate[];
   readonly removed: readonly DirtyComponent[];
@@ -19,8 +20,13 @@ export interface DirtyComponent {
   readonly componentId: number;
 }
 
+export interface DirtyNetwork {
+  readonly entityId: number;
+}
+
 export class DirtyGraph {
   readonly #created = new Set<number>();
+  readonly #network = new Set<number>();
   readonly #added = new Map<string, DirtyComponent>();
   readonly #updated = new Map<string, DirtyUpdate>();
   readonly #removed = new Map<string, DirtyComponent>();
@@ -28,6 +34,7 @@ export class DirtyGraph {
 
   markCreated(entityId: number): void {
     this.#created.add(entityId);
+    this.#network.delete(entityId);
     this.#deleteEntityUpdates(entityId);
     this.#destroyed.delete(entityId);
   }
@@ -59,6 +66,13 @@ export class DirtyGraph {
     });
   }
 
+  markNetworkChanged(entityId: number): void {
+    if (this.#destroyed.has(entityId)) {
+      return;
+    }
+    this.#network.add(entityId);
+  }
+
   markRemoved(entityId: number, componentId: number): void {
     const componentKey = key(entityId, componentId);
     if (this.#added.delete(componentKey)) {
@@ -71,6 +85,7 @@ export class DirtyGraph {
   markDestroyed(entityId: number): void {
     if (this.#created.delete(entityId)) {
       this.#deleteEntityUpdates(entityId);
+      this.#network.delete(entityId);
       this.#deleteEntityComponents(this.#added, entityId);
       this.#deleteEntityComponents(this.#removed, entityId);
       this.#destroyed.delete(entityId);
@@ -78,6 +93,7 @@ export class DirtyGraph {
     }
 
     this.#deleteEntityUpdates(entityId);
+    this.#network.delete(entityId);
     this.#deleteEntityComponents(this.#added, entityId);
     this.#deleteEntityComponents(this.#removed, entityId);
     this.#destroyed.add(entityId);
@@ -86,6 +102,7 @@ export class DirtyGraph {
   collectOps(): DirtyOps {
     return {
       created: [...this.#created].sort((a, b) => a - b),
+      network: [...this.#network].sort((a, b) => a - b).map((entityId) => ({ entityId })),
       added: [...this.#added.values()].sort(compareDirtyComponent),
       updated: [...this.#updated.values()].sort(compareDirtyUpdate),
       removed: [...this.#removed.values()].sort(compareDirtyComponent),
@@ -101,6 +118,10 @@ export class DirtyGraph {
     // Clear only the bits that were actually encoded. Writes that happen during encoding remain dirty.
     for (const entityId of ops.created) {
       this.#created.delete(entityId);
+    }
+
+    for (const op of ops.network) {
+      this.#network.delete(op.entityId);
     }
 
     for (const op of ops.added) {
@@ -147,6 +168,7 @@ export class DirtyGraph {
 
   clear(): void {
     this.#created.clear();
+    this.#network.clear();
     this.#added.clear();
     this.#updated.clear();
     this.#removed.clear();

@@ -1,4 +1,5 @@
 import type { ComponentSchema, FieldDefinitions } from "../schema/index";
+import type { PeerId } from "../platform/index";
 import type { DirtyGraph } from "./dirty-graph";
 import type {
   ClientWorld,
@@ -12,6 +13,8 @@ export interface WorldInternals {
   getRecord(entityId: number, componentId?: number): ComponentRecord | undefined;
   getRecords(): readonly ComponentRecord[];
   getEntityIds(): readonly number[];
+  getNetworkOwners(): readonly { readonly entityId: number; readonly owner: PeerId }[];
+  getOwner(entityId: number): PeerId;
   getDirtySnapshot(): ReturnType<DirtyGraph["collectOps"]>;
   clearWrittenDirty(ops: ReturnType<DirtyGraph["collectOps"]>): void;
   getDirtyMask(entityId: number, componentId?: number): number;
@@ -21,6 +24,7 @@ export interface WorldInternals {
     entityId: number,
   ): ComponentInstance<TFields>;
   applyCreateEntityFromRemote(entityId: number): void;
+  applyNetworkFromRemote(entityId: number, owner: PeerId): void;
   applyRemoveFromRemote(entityId: number, componentId: number): void;
   applyDestroyFromRemote(entityId: number, schemaId?: number): void;
 }

@@ -91,13 +91,13 @@ const player = hostWorld.spawn(Player, {
   health: { hp: 100 },
 });
 
-hostWorld.on(Move, (payload) => {
+hostWorld.on(Move, (ctx) => {
   const position = hostWorld.get(player, Position);
   if (position === undefined) {
     return;
   }
-  position.x.value += payload.dx;
-  position.y.value += payload.dy;
+  position.x.value += ctx.payload.dx;
+  position.y.value += ctx.payload.dy;
 });
 
 hostWorld.system("movement", "update", (world) => {
@@ -156,8 +156,10 @@ SnapScript owns:
 - dirty tracking
 - snapshot encode/apply
 - command/event packet encoding
+- world-local peer ids and entity ownership metadata
 - host/client world runtime
 - optional visibility filtering
+- `.snap` protocol generation tooling
 - benchmark and protocol diagnostics
 
 SnapScript does not own:
@@ -190,6 +192,8 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 - run systems
 - receive commands through `on()`
 - broadcast events through `broadcast()`
+- send events to one peer through `sendTo()`
+- set and query ownership through `setOwner()`, `clearOwner()`, `ownerOf()`, `isOwner()`, and `ownedBy()`
 - control visibility
 - send full snapshots
 
@@ -200,6 +204,7 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 - run client systems
 - send commands through `send()`
 - receive events through `on()`
+- read `myPeerId()`, `ownerOf(entity)`, and `isMine(entity)`
 - request a full snapshot
 - observe applied snapshots through `onSnapshot()`
 
@@ -275,6 +280,17 @@ Definitions are frozen and fail fast:
 
 `protocol.manifest()` returns a frozen summary of component, prefab, command, and event ids. Use it for diagnostics, protocol validation, or tooling.
 
+## `.snap` IDL
+
+Handwritten definitions are still the runtime foundation. For larger projects, `.snap` files provide a declaration-first workflow that generates the same runtime calls plus typed RPC helpers:
+
+```sh
+snapscript check examples/protocol/example.snap
+snapscript generate examples/protocol/example.snap
+```
+
+`generate` writes `generated/protocol.ts`, `generated/manifest.json`, and `snapscript.lock.json` next to the input by default. The lock file keeps component, entity, RPC, and field ids stable when definitions are reordered. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/example.snap](examples/protocol/example.snap).
+
 ## RPC
 
 Commands travel client to host:
@@ -285,8 +301,8 @@ const Jump = defineCommand("Jump", {
 });
 
 clientWorld.send(Jump, { strength: 0.75 });
-hostWorld.on(Jump, (payload, context) => {
-  console.log(payload.strength, context.peer);
+hostWorld.on(Jump, (ctx) => {
+  console.log(ctx.payload.strength, ctx.sender);
 });
 ```
 
@@ -298,12 +314,39 @@ const TookDamage = defineEvent("TookDamage", {
 });
 
 hostWorld.broadcast(TookDamage, { amount: 10 });
-clientWorld.on(TookDamage, (payload) => {
-  playDamageFx(payload.amount);
+clientWorld.on(TookDamage, (ctx) => {
+  playDamageFx(ctx.payload.amount);
 });
 ```
 
-RPC payloads and handler contexts are frozen. Handler errors are isolated and logged through `logger.error`. Handlers run from a stable dispatch snapshot, so handlers registered during one dispatch start on a later packet.
+RPC handlers receive one frozen context object. `ctx.payload` is the decoded payload, `ctx.sender` is the SnapScript peer id, `ctx.tick` is the sender tick, and `ctx.channel` is the logical channel used by the packet. Host command handlers receive the client peer id; client event handlers receive `ServerPeerId` (`0`).
+
+Hosts can broadcast an event to every connected client or route it to one peer:
+
+```ts
+hostWorld.broadcast(TookDamage, { amount: 10 });
+hostWorld.sendTo(peerId, TookDamage, { amount: 10 });
+```
+
+Handler errors are isolated and logged through `logger.error`. Handlers run from a stable dispatch snapshot, so handlers registered during one dispatch start on a later packet.
+
+## Peer Ids And Ownership
+
+`PeerId` is a world-local connection id. `ServerPeerId` is always `0`; client peer ids start at `1` and are assigned by the host during the hello/full-snapshot handshake.
+
+Ownership is internal network metadata, not a component that users add, remove, or query:
+
+```ts
+hostWorld.setOwner(player, peerId);
+hostWorld.isOwner(peerId, player);
+hostWorld.ownedBy(peerId);
+
+clientWorld.myPeerId();
+clientWorld.isMine(player.id);
+clientWorld.ownerOf(player.id);
+```
+
+Entities default to owner `0`. `clearOwner(entity)` sets ownership back to the server. Ownership is synchronized in snapshots and dirty structural updates, so client-side `isMine(entity)` follows host authority.
 
 ## Transport Boundary
 
@@ -382,13 +425,13 @@ const hostWorld = createHostWorld({
   protocol,
   transport,
   clock,
-  interest(peer, entity, world) {
+  interest(peerId, entity, world) {
     return world.has(entity, Position);
   },
 });
 ```
 
-Interest hooks receive read-only entity/world inputs and must return a boolean. Manual overrides are available with `setVisible(peer, entity, visible)` and `clearVisible(peer, entity?)`.
+Interest hooks receive a SnapScript `PeerId`, read-only entity/world inputs, and must return a boolean. Manual overrides are available with `setVisible(peerId, entity, visible)` and `clearVisible(peerId, entity?)`.
 
 Visibility applies to full snapshots and incremental sync. When visibility is peer-specific, the host encodes peer-specific snapshots and reconciles stale peer state with removals/destroys.
 

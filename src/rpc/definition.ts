@@ -60,10 +60,17 @@ function defineRpc<TFields extends FieldDefinitions>(
   const rpcFields: Record<string, InternalSchemaField<unknown>> = {};
   const fieldList: InternalSchemaField<unknown>[] = [];
 
-  entries.forEach(([fieldName, definition], fieldId) => {
+  const seenFieldIds = new Set<number>();
+  entries.forEach(([fieldName, definition], index) => {
     if (!isFieldDefinition(definition)) {
       throw new Error(`RPC "${name}" field "${fieldName}" must be created by a SnapScript field helper`);
     }
+    const fieldId = options?.fieldIds?.[fieldName] ?? index;
+    assertRpcFieldId(name, fieldName, fieldId);
+    if (seenFieldIds.has(fieldId)) {
+      throw new Error(`RPC "${name}" field id ${fieldId} is used more than once`);
+    }
+    seenFieldIds.add(fieldId);
     const field = Object.freeze(
       definition.metadata === undefined
         ? {
@@ -116,8 +123,17 @@ function assertRpcOptions(name: string, options: RpcOptions | undefined): void {
     return;
   }
   assertPlainObjectMap(`RPC "${name}" options`, options);
+  if (options.fieldIds !== undefined) {
+    assertPlainObjectMap(`RPC "${name}" fieldIds`, options.fieldIds);
+  }
   if (options.metadata !== undefined) {
     assertPlainObjectMap(`RPC "${name}" metadata`, options.metadata);
+  }
+}
+
+function assertRpcFieldId(name: string, fieldName: string, fieldId: number): void {
+  if (!Number.isInteger(fieldId) || fieldId < 0 || fieldId > 31) {
+    throw new RangeError(`RPC "${name}" field "${fieldName}" id must be an integer in [0, 31]`);
   }
 }
 

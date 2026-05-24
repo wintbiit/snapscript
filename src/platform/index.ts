@@ -4,6 +4,12 @@ export type ChannelName = "reliable" | "unreliable";
 /** Stable peer handle chosen by the host transport. Object refs are allowed when the adapter owns identity. */
 export type PeerRef = string | number | symbol | object;
 
+/** SnapScript connection id assigned by a HostWorld. `0` is always the host/server. */
+export type PeerId = number;
+
+/** Reserved peer id for the authoritative host/server. */
+export const ServerPeerId: PeerId = 0;
+
 /** Client-side transport adapter passed to `createClientWorld()`. */
 export interface ClientTransport {
   send(channel: ChannelName, bytes: Uint8Array): void;

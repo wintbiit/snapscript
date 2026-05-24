@@ -1,7 +1,7 @@
-import type { ClientTransport, Clock, HostTransport, Logger, PeerRef } from "../platform/index";
+import { ServerPeerId, type ClientTransport, type Clock, type HostTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
 import { decodeRpc, encodeRpc } from "../rpc/index";
-import type { RpcContext, RpcDefinition, RpcHandler } from "../rpc/index";
+import type { RpcCtx, RpcDefinition, RpcHandler } from "../rpc/index";
 import type { FieldDefinitions, FieldValues } from "../schema/index";
 import {
   applySnapshot,
@@ -29,7 +29,7 @@ export interface SyncHostOptions {
   readonly logger?: Logger;
   readonly sendRate?: number;
   readonly snapshotEncoding?: "default" | "batched";
-  readonly isVisible?: (peer: PeerRef, entityId: number) => boolean;
+  readonly isVisible?: (peerId: PeerId, entityId: number) => boolean;
   readonly canReusePeerSnapshots?: () => boolean;
 }
 
@@ -49,6 +49,11 @@ export interface SyncHost {
   start(): void;
   update(): void;
   sendFullSnapshot(peer?: PeerRef): void;
+  sendTo<TFields extends FieldDefinitions>(
+    peerId: PeerId,
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
   broadcast<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
@@ -62,6 +67,7 @@ export interface SyncHost {
 export interface SyncClient {
   start(): void;
   requestFullSnapshot(): void;
+  peerId(): PeerId;
   send<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
@@ -76,6 +82,28 @@ interface PeerState {
   readonly knownEntities: Set<number>;
   readonly knownComponents: Set<string>;
   capabilities: number;
+}
+
+class PeerIds {
+  readonly #byRef = new Map<PeerRef, PeerId>();
+  readonly #byId = new Map<PeerId, PeerRef>();
+  #next = 1;
+
+  idFor(peer: PeerRef): PeerId {
+    const existing = this.#byRef.get(peer);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const peerId = this.#next;
+    this.#next += 1;
+    this.#byRef.set(peer, peerId);
+    this.#byId.set(peerId, peer);
+    return peerId;
+  }
+
+  refFor(peerId: PeerId): PeerRef | undefined {
+    return this.#byId.get(peerId);
+  }
 }
 
 type HandlerEntry = {
@@ -118,15 +146,17 @@ class HandlerTable {
   dispatch(
     rpc: RpcDefinition,
     payload: FieldValues<FieldDefinitions>,
-    context: RpcContext,
+    context: Omit<RpcCtx<FieldValues<FieldDefinitions>>, "payload">,
     logger: Logger | undefined,
   ): void {
-    const frozenPayload = Object.freeze(payload) as Readonly<FieldValues<FieldDefinitions>>;
-    const frozenContext = Object.freeze(context);
+    const frozenContext = Object.freeze({
+      ...context,
+      payload: Object.freeze(payload) as Readonly<FieldValues<FieldDefinitions>>,
+    });
     // Handlers run from a stable snapshot so registration changes during dispatch affect later packets only.
     for (const entry of [...(this.#handlers.get(rpc.rpcId) ?? [])]) {
       try {
-        entry.handler(frozenPayload, frozenContext);
+        entry.handler(frozenContext);
       } catch (error) {
         logger?.error?.("RPC handler failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -140,10 +170,12 @@ class HandlerTable {
 export function createSyncHost(options: SyncHostOptions): SyncHost {
   const handlers = new HandlerTable();
   const peers = new Set<PeerRef>();
+  const peerIds = new PeerIds();
   const peerStates = new Map<PeerRef, PeerState>();
 
   options.transport.onPacket((peer, packetChannel, bytes) => {
     peers.add(peer);
+    const peerId = peerIds.idFor(peer);
     try {
       const messageType = peekMessageType(bytes);
       if (messageType === MessageType.Control) {
@@ -153,6 +185,11 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
           control.type === ControlType.Hello ||
           control.type === ControlType.FullSnapshotRequest
         ) {
+          options.transport.send(
+            peer,
+            "reliable",
+            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId),
+          );
           sendFullSnapshot(peer);
         }
         return;
@@ -167,7 +204,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
             tick: decoded.tick,
             channel: packetChannel,
             rpc: decoded.rpc,
-            peer,
+            sender: peerId,
           },
           options.logger,
         );
@@ -180,8 +217,9 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
 
   function sendFullSnapshot(peer?: PeerRef): void {
     if (peer !== undefined) {
+      const peerId = peerIds.idFor(peer);
       const state = stateFor(peerStates, peer);
-      const ops = buildFullOpsForPeer(options.world, peer, options.isVisible, state);
+      const ops = buildFullOpsForPeer(options.world, peerId, options.isVisible, state);
       const bytes = encodeSnapshotOps(options.world, options.clock.tick(), ops);
       options.transport.send(peer, "reliable", bytes);
       replaceKnownState(peerStates, peer, ops);
@@ -222,8 +260,9 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
       const encodedStructural = new Map<string, Uint8Array>();
       const encodedUpdates = new Map<string, Uint8Array>();
       for (const peer of peerList) {
+        const peerId = peerIds.idFor(peer);
         const state = stateFor(peerStates, peer);
-        const structural = buildStructuralOpsForPeer(options.world, dirty, peer, state, options.isVisible);
+        const structural = buildStructuralOpsForPeer(options.world, dirty, peerId, state, options.isVisible);
         if (hasSnapshotOps(structural)) {
           options.transport.send(
             peer,
@@ -235,7 +274,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
           applyKnownOps(state, structural);
         }
 
-        const updates = buildUpdateOpsForPeer(dirty, peer, state, options.isVisible);
+        const updates = buildUpdateOpsForPeer(dirty, peerId, state, options.isVisible);
         if (hasSnapshotOps(updates)) {
           options.transport.send(
             peer,
@@ -249,6 +288,13 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
       internals.clearWrittenDirty(dirty);
     },
     sendFullSnapshot,
+    sendTo(peerId, rpc, payload) {
+      const peer = peerIds.refFor(peerId);
+      if (peer === undefined) {
+        throw new Error(`HostWorld.sendTo() unknown peer ${peerId}`);
+      }
+      options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
+    },
     broadcast(rpc, payload) {
       options.transport.broadcast(rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
     },
@@ -270,6 +316,7 @@ function trySendSharedUpdate(
     options.canReusePeerSnapshots?.() !== true ||
     peers.length === 0 ||
     dirty.updated.length === 0 ||
+    dirty.network.length !== 0 ||
     dirty.created.length !== 0 ||
     dirty.added.length !== 0 ||
     dirty.removed.length !== 0 ||
@@ -338,11 +385,18 @@ function encodedPacket(
 function snapshotOpsKey(ops: SnapshotWriteOps): string {
   return [
     `c${(ops.created ?? []).join(",")}`,
+    `n${networkOpsKey(ops.network)}`,
     `a${componentOpsKey(ops.added)}`,
     `u${updateOpsKey(ops.updated)}`,
     `r${componentOpsKey(ops.removed)}`,
     `d${(ops.destroyed ?? []).join(",")}`,
   ].join("|");
+}
+
+function networkOpsKey(
+  ops: readonly { readonly entityId: number; readonly owner?: number }[] | undefined,
+): string {
+  return (ops ?? []).map((op) => `${op.entityId}:${op.owner ?? ""}`).join(",");
 }
 
 function componentOpsKey(
@@ -367,10 +421,18 @@ function updateOpsKey(
 
 export function createSyncClient(options: SyncClientOptions): SyncClient {
   const handlers = new HandlerTable();
+  let assignedPeerId: PeerId = ServerPeerId;
 
   options.transport.onPacket((packetChannel, bytes) => {
     try {
       const messageType = peekMessageType(bytes);
+      if (messageType === MessageType.Control) {
+        const control = decodeControl(bytes);
+        if (control.type === ControlType.PeerAssigned) {
+          assignedPeerId = control.peerId ?? ServerPeerId;
+        }
+        return;
+      }
       if (messageType === MessageType.Snapshot) {
         const tick = applySnapshot(options.world, bytes, options.registry);
         options.onSnapshot?.(Object.freeze({ tick, channel: packetChannel }));
@@ -386,6 +448,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             tick: decoded.tick,
             channel: packetChannel,
             rpc: decoded.rpc,
+            sender: ServerPeerId,
           },
           options.logger,
         );
@@ -409,6 +472,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         "reliable",
         encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities()),
       );
+    },
+    peerId() {
+      return assignedPeerId;
     },
     requestFullSnapshot,
     send(rpc, payload) {
@@ -458,28 +524,30 @@ function componentOpFromKey(key: string): { entityId: number; componentId: numbe
 }
 
 function isVisible(
-  peer: PeerRef,
+  peerId: PeerId,
   entityId: number,
   visibility: SyncHostOptions["isVisible"],
 ): boolean {
-  return visibility?.(peer, entityId) ?? true;
+  return visibility?.(peerId, entityId) ?? true;
 }
 
 function buildFullOpsForPeer(
   world: HostWorld,
-  peer: PeerRef,
+  peerId: PeerId,
   visibility: SyncHostOptions["isVisible"],
   state?: PeerState,
 ): SnapshotWriteOps {
   // Full snapshots also reconcile stale peer state, so disappearing visibility becomes removals/destroys.
   const internals = worldInternals(world);
-  const created = internals.getEntityIds().filter((entityId) => isVisible(peer, entityId, visibility));
+  const created = internals.getEntityIds().filter((entityId) => isVisible(peerId, entityId, visibility));
+  const visibleCreated = new Set(created);
+  const network = internals.getNetworkOwners().filter((op) => visibleCreated.has(op.entityId));
   const added = internals
     .getRecords()
-    .filter((record) => isVisible(peer, record.entityId, visibility))
+    .filter((record) => isVisible(peerId, record.entityId, visibility))
     .map((record) => ({ entityId: record.entityId, componentId: record.schema.schemaId }));
   if (state === undefined) {
-    return { created, added };
+    return { created, network, added };
   }
 
   const currentEntities = new Set(created);
@@ -496,6 +564,7 @@ function buildFullOpsForPeer(
 
   return {
     created,
+    network,
     added,
     removed,
     destroyed,
@@ -516,7 +585,7 @@ function replaceKnownState(
 function buildStructuralOpsForPeer(
   world: HostWorld,
   dirty: DirtyOps,
-  peer: PeerRef,
+  peerId: PeerId,
   state: PeerState,
   visibility: SyncHostOptions["isVisible"],
 ): SnapshotWriteOps {
@@ -527,7 +596,7 @@ function buildStructuralOpsForPeer(
   const destroyed = new Set<number>();
 
   for (const entityId of state.knownEntities) {
-    if (!isVisible(peer, entityId, visibility) || dirty.destroyed.includes(entityId)) {
+    if (!isVisible(peerId, entityId, visibility) || dirty.destroyed.includes(entityId)) {
       destroyed.add(entityId);
     }
   }
@@ -539,7 +608,7 @@ function buildStructuralOpsForPeer(
   }
 
   for (const entityId of internals.getEntityIds()) {
-    if (!isVisible(peer, entityId, visibility) || dirty.destroyed.includes(entityId)) {
+    if (!isVisible(peerId, entityId, visibility) || dirty.destroyed.includes(entityId)) {
       continue;
     }
     if (!state.knownEntities.has(entityId)) {
@@ -548,7 +617,7 @@ function buildStructuralOpsForPeer(
   }
 
   for (const record of internals.getRecords()) {
-    if (!isVisible(peer, record.entityId, visibility) || dirty.destroyed.includes(record.entityId)) {
+    if (!isVisible(peerId, record.entityId, visibility) || dirty.destroyed.includes(record.entityId)) {
       continue;
     }
     const key = componentKey(record.entityId, record.schema.schemaId);
@@ -557,8 +626,23 @@ function buildStructuralOpsForPeer(
     }
   }
 
+  const networkByEntity = new Map<number, { entityId: number; owner: number }>();
+  for (const entityId of created) {
+    const owner = internals.getOwner(entityId);
+    if (owner !== ServerPeerId) {
+      networkByEntity.set(entityId, { entityId, owner });
+    }
+  }
+  for (const op of dirty.network) {
+    if (state.knownEntities.has(op.entityId) && isVisible(peerId, op.entityId, visibility)) {
+      networkByEntity.set(op.entityId, { entityId: op.entityId, owner: internals.getOwner(op.entityId) });
+    }
+  }
+  const network = [...networkByEntity.values()].sort((a, b) => a.entityId - b.entityId);
+
   return {
     created: [...created].sort((a, b) => a - b),
+    network,
     added: [...added.values()].sort(compareComponentOp),
     removed: [...removed.values()].sort(compareComponentOp),
     destroyed: [...destroyed].sort((a, b) => a - b),
@@ -567,14 +651,14 @@ function buildStructuralOpsForPeer(
 
 function buildUpdateOpsForPeer(
   dirty: DirtyOps,
-  peer: PeerRef,
+  peerId: PeerId,
   state: PeerState,
   visibility: SyncHostOptions["isVisible"],
 ): SnapshotWriteOps {
   return {
     updated: dirty.updated.filter(
       (op) =>
-        isVisible(peer, op.entityId, visibility) &&
+        isVisible(peerId, op.entityId, visibility) &&
         state.knownComponents.has(componentKey(op.entityId, op.componentId)),
     ),
   };

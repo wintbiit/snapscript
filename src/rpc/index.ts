@@ -7,7 +7,7 @@ export type {
   CommandDefinition,
   EventDefinition,
   RpcCodec,
-  RpcContext,
+  RpcCtx,
   RpcDefinition,
   RpcHandler,
   RpcKind,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as SnapScript from "../src/index";
 
 const expectedValueExports = [
+  "ServerPeerId",
   "angle12",
   "angle16",
   "angle8",

@@ -16,6 +16,7 @@ import {
   type PrefabInstanceOf,
   type ProtocolManifestEntry,
   type ReadonlyPrefabInstanceOf,
+  type PeerId,
   type PeerRef,
   type ReplicatedStateReader,
 } from "../src/index";
@@ -135,7 +136,7 @@ if (false) {
     protocol,
     transport: hostTransport,
     clock,
-    interest(_peer, entity, world) {
+    interest(_peerId, entity, world) {
       entity.id.toFixed();
       world.has(entity, Position);
       world.get(entity, Position)!.x.value.toFixed();
@@ -146,7 +147,7 @@ if (false) {
       // @ts-expect-error interest world is a read-only policy view
       world.spawn(Position);
       // @ts-expect-error interest world cannot change manual visibility
-      world.setVisible("peer", entity, true);
+      world.setVisible(1, entity, true);
       // @ts-expect-error interest world component refs are read-only
       world.get(entity, Position)!.x.value = 1;
       return true;
@@ -192,17 +193,20 @@ if (false) {
   Command.codec;
 }
 
-host.on(Command, (payload, context) => {
-  payload.amount.toFixed();
-  const peer: PeerRef | undefined = context.peer;
-  peer?.toString();
+host.on(Command, (context) => {
+  context.payload.amount.toFixed();
+  const peer: PeerId = context.sender;
+  peer.toFixed();
 });
 host.broadcast(Event, { amount: 1 });
 host.broadcast(Event);
+if (false) {
+  host.sendTo(1, Event, { amount: 1 });
+}
 client.send(Command, { amount: 1 });
 client.send(Command);
-client.on(Event, (payload) => {
-  payload.amount.toFixed();
+client.on(Event, (context) => {
+  context.payload.amount.toFixed();
 });
 host.each([Position, Velocity], (entity, pos, vel) => {
   entity.id.toFixed();
@@ -269,9 +273,9 @@ if (false) {
   client.on(Command, () => {});
   // @ts-expect-error RPC channels are constrained to transport policy names
   defineCommand("InvalidTypeChannelCommand", { amount: u16(1) }, { channel: "ordered" });
-  host.on(Command, (payload) => {
+  host.on(Command, (context) => {
     // @ts-expect-error RPC payloads are read-only handler inputs
-    payload.amount = 2;
+    context.payload.amount = 2;
   });
 }
 if (false) {

@@ -96,10 +96,17 @@ export function defineComponent<TFields extends FieldDefinitions>(
   const schemaFields: Record<string, InternalSchemaField<unknown>> = {};
   const fieldList: InternalSchemaField<unknown>[] = [];
 
-  entries.forEach(([fieldName, definition], fieldId) => {
+  const seenFieldIds = new Set<number>();
+  entries.forEach(([fieldName, definition], index) => {
     if (!isFieldDefinition(definition)) {
       throw new Error(`Component "${name}" field "${fieldName}" must be created by a SnapScript field helper`);
     }
+    const fieldId = options?.fieldIds?.[fieldName] ?? index;
+    assertFieldId("Component", name, fieldName, fieldId);
+    if (seenFieldIds.has(fieldId)) {
+      throw new Error(`Component "${name}" field id ${fieldId} is used more than once`);
+    }
+    seenFieldIds.add(fieldId);
     const internalDefinition = definition as InternalFieldDefinition<unknown>;
     const schemaField = Object.freeze(
       definition.metadata === undefined
@@ -126,6 +133,7 @@ export function defineComponent<TFields extends FieldDefinitions>(
   const frozenFields = Object.freeze(schemaFields) as InternalEntitySchema<TFields>["fields"];
   const frozenFieldList = Object.freeze(fieldList) as InternalSchemaField<FieldValue<TFields[keyof TFields]>>[];
   const codec = Object.freeze(createSchemaCodec(frozenFieldList));
+  const fullMask = frozenFieldList.reduce((mask, field) => mask | field.dirtyBit, 0);
   const base: InternalEntitySchema<TFields> = {
     kind: "component" as const,
     name,
@@ -133,7 +141,7 @@ export function defineComponent<TFields extends FieldDefinitions>(
     fields: frozenFields,
     fieldList: frozenFieldList,
     fieldCount: entries.length,
-    fullMask: entries.length === 32 ? 0xffffffff : (1 << entries.length) - 1,
+    fullMask,
     codec,
   };
   const schema: InternalEntitySchema<TFields> =
@@ -188,8 +196,17 @@ function assertEntityOptions(
     return;
   }
   assertPlainObjectMap(`${kind} "${name}" options`, options);
+  if (options.fieldIds !== undefined) {
+    assertPlainObjectMap(`${kind} "${name}" fieldIds`, options.fieldIds);
+  }
   if (options.metadata !== undefined) {
     assertPlainObjectMap(`${kind} "${name}" metadata`, options.metadata);
+  }
+}
+
+function assertFieldId(kind: string, name: string, fieldName: string, fieldId: number): void {
+  if (!Number.isInteger(fieldId) || fieldId < 0 || fieldId > 31) {
+    throw new RangeError(`${kind} "${name}" field "${fieldName}" id must be an integer in [0, 31]`);
   }
 }
 

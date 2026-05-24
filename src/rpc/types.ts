@@ -1,5 +1,5 @@
 import type { BinaryReader, BinaryWriter } from "../binary/index";
-import type { ChannelName, PeerRef } from "../platform/index";
+import type { ChannelName, PeerId } from "../platform/index";
 import type {
   FieldDefinition,
   FieldDefinitions,
@@ -48,22 +48,21 @@ export type EventDefinition<TFields extends FieldDefinitions = FieldDefinitions>
 /** Optional id/channel/metadata settings for command and event definitions. */
 export interface RpcOptions {
   readonly id?: number;
+  readonly fieldIds?: Record<string, number>;
   readonly channel?: ChannelName;
   readonly metadata?: Record<string, unknown>;
 }
 
-/** Handler invoked with frozen payload and context objects. */
-export type RpcHandler<TFields extends FieldDefinitions> = (
-  payload: Readonly<FieldValues<TFields>>,
-  context: RpcContext,
-) => void;
+/** Handler invoked with a frozen RPC context object. */
+export type RpcHandler<TFields extends FieldDefinitions> = (context: RpcCtx<FieldValues<TFields>>) => void;
 
 /** Runtime context passed to command and event handlers. */
-export interface RpcContext {
+export interface RpcCtx<TPayload = unknown> {
+  readonly payload: Readonly<TPayload>;
   readonly tick: number;
   readonly rpc: RpcDefinition;
-  readonly channel?: ChannelName;
-  readonly peer?: PeerRef;
+  readonly channel: ChannelName;
+  readonly sender: PeerId;
 }
 
 export type RpcFieldsInput = Record<string, FieldDefinition<unknown>>;

@@ -284,8 +284,9 @@ export class HostDemo {
       });
     });
 
-    this.world.on(MoveCommand, (payload) => {
+    this.world.on(MoveCommand, (ctx) => {
       // Commands are intent; the host decides how intent changes replicated state.
+      const payload = ctx.payload;
       const vel = this.world.get(this.player, Velocity);
       if (vel !== undefined) {
         vel.x.value += payload.dx * 0.18;
@@ -293,7 +294,8 @@ export class HostDemo {
       }
     });
 
-    this.world.on(DamageCommand, (payload) => {
+    this.world.on(DamageCommand, (ctx) => {
+      const payload = ctx.payload;
       const target = this.world.get(payload.target || this.player.id, Health);
       if (target === undefined) {
         return;
@@ -368,7 +370,8 @@ export class ClientDemo {
     this.clock = clock;
     this.world = createClientWorld({ protocol, transport: this.#transport, clock: this.clock });
 
-    this.world.on(DamageEvent, (payload) => {
+    this.world.on(DamageEvent, (ctx) => {
+      const payload = ctx.payload;
       // Events are side-channel notifications; component truth still comes from snapshots.
       this.#lastEvent = `damage fx ${payload.amount} on #${payload.entityId}`;
     });

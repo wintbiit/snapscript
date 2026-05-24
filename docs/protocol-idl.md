@@ -117,7 +117,8 @@ Reasons:
 - A custom DSL can generate current SnapScript runtime calls without implying that the wire format is
   protobuf or FlatBuffers.
 
-We should still avoid a handwritten parser. The current candidates are Peggy and Chevrotain.
+We avoid a handwritten parser. The current implementation uses Peggy for the v1 single-file grammar.
+Chevrotain remains a later option if the language grows editor tooling, imports, or richer recovery.
 
 ### Peggy
 
@@ -153,48 +154,41 @@ Risks:
 - Slower to get the first compact grammar working.
 - The parser implementation can feel heavier than the DSL itself in phase one.
 
-### Current Recommendation
+The parser/compiler is a development tool dependency. Generated protocol files do not depend on
+Peggy; they import only the SnapScript runtime API.
 
-Start with a small parser spike for both, then choose based on developer experience:
+## v1 Language Surface
 
-- parse a representative `.snap` file
-- produce the same AST shape
-- report duplicate names and unknown field types
-- preserve source spans for diagnostics
-- run in Node without runtime dependencies that hurt generated user code
-
-The parser/compiler can be a development tool dependency. Generated protocol files should not depend
-on the parser package.
-
-## Tentative Language Surface
-
-The final syntax is not decided yet. A representative direction:
+The v1 syntax is represented by `examples/protocol/example.snap`:
 
 ```snap
-component Position {
+syntax = "v1"
+
+struct Vector2 {
   x: qf32(min: -128, max: 128, precision: 0.01, default: 0)
   y: qf32(min: -128, max: 128, precision: 0.01, default: 0)
 }
 
+component Position {
+  Vector2
+  hidden: bool(default: false)
+}
+
 component Health {
-  hp: u16(default: 100)
+  hp: u16(100)
 }
 
 entity Player {
   position: Position
   health: Health
-}
-
-command Move channel unreliable {
-  dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
-  dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
-}
-
-event TookDamage {
-  entityId: varu32(default: 0)
-  amount: u16(default: 0)
+service Movement {
+  command Move(input: MoveInput) unreliable
+  event MoveDisabled(disabled: bool) reliable
 }
 ```
+
+`service` is an RPC namespace only. It does not create a system, app, room, or transport binding.
+Runtime RPC names use the service prefix, for example `Movement.Move`.
 
 The first generated output should include:
 
@@ -212,11 +206,16 @@ The IDL should reduce repeated command/event wiring.
 The generated code may expose helpers like:
 
 ```ts
-rpc.commands.Move.send(clientWorld, { dx: 1, dy: 0 });
-rpc.commands.Move.on(hostWorld, (payload, context) => {});
+rpc.commands.MovementMove.send(clientWorld, { dx: 1, dy: 0 });
+rpc.commands.MovementMove.on(hostWorld, (ctx) => {
+  ctx.payload.dx;
+  ctx.sender;
+});
 
-rpc.events.TookDamage.broadcast(hostWorld, { entityId: 1, amount: 10 });
-rpc.events.TookDamage.on(clientWorld, (payload) => {});
+rpc.events.MovementMoveDisabled.broadcast(hostWorld, { disabled: true });
+rpc.events.MovementMoveDisabled.on(clientWorld, (ctx) => {
+  ctx.payload.disabled;
+});
 ```
 
 This keeps the world API unchanged while making generated usage more declarative. The raw

@@ -1,3 +1,4 @@
+import { ServerPeerId, type PeerId } from "../platform/index";
 import type {
   ChannelName,
   ClientTransport,
@@ -347,10 +348,10 @@ export interface HostWorldOptions {
   /**
    * Optional host-owned interest hook.
    *
-   * The hook receives read-only world inputs and must return a boolean. Use `visibility: "all"`
+   * The hook receives a SnapScript peer id and read-only world inputs, and must return a boolean. Use `visibility: "all"`
    * when every entity should be visible to every peer.
    */
-  readonly interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
+  readonly interest?: (peerId: PeerId, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
 }
 
 /**
@@ -392,6 +393,8 @@ export interface ReplicatedStateReader {
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
+  /** Returns the synchronized owner peer id for an entity. Server-owned entities return `0`. */
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
   /** Creates a lazy read-only query with `.length`, `.map()`, `.forEach()`, and `.toArray()`. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
@@ -411,12 +414,15 @@ function createWorldInternals(core: WorldCore): WorldInternals {
     getRecord: (entityId, componentId) => core._getRecord(entityId, componentId),
     getRecords: () => core._getRecords(),
     getEntityIds: () => core._getEntityIds(),
+    getNetworkOwners: () => core._getNetworkOwners(),
+    getOwner: (entityId) => core.ownerOf(entityId),
     getDirtySnapshot: () => core._getDirtySnapshot(),
     clearWrittenDirty: (ops) => core._clearWrittenDirty(ops),
     getDirtyMask: (entityId, componentId) => core._getDirtyMask(entityId, componentId),
     entityRef: (entityId) => core._entityRef(entityId),
     spawnRemote: (component, entityId) => core._spawnRemote(component, entityId),
     applyCreateEntityFromRemote: (entityId) => core._applyCreateEntityFromRemote(entityId),
+    applyNetworkFromRemote: (entityId, owner) => core._applyNetworkFromRemote(entityId, owner),
     applyRemoveFromRemote: (entityId, componentId) =>
       core._applyRemoveFromRemote(entityId, componentId),
     applyDestroyFromRemote: (entityId, schemaId) =>
@@ -430,6 +436,8 @@ class WorldCore implements QueryWorldAccess {
   readonly #systems = new Map<SystemPhase, { name: string; fn: SystemFn }[]>();
   readonly #entityRefs = new Map<number, EntityRef>();
   readonly #readonlyEntityRefs = new Map<number, ReadonlyEntityRef>();
+  readonly #owners = new Map<number, PeerId>();
+  readonly #ownedEntities = new Map<PeerId, Set<number>>();
   readonly #readonlyComponents = new WeakMap<
     ComponentInstance<FieldDefinitions>,
     ReadonlyComponentInstance<FieldDefinitions>
@@ -714,8 +722,40 @@ class WorldCore implements QueryWorldAccess {
 
     this.#entityRefs.delete(entityId);
     this.#readonlyEntityRefs.delete(entityId);
+    this.#clearOwnerInternal(entityId);
     this.dirty.markDestroyed(entityId);
     return true;
+  }
+
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId {
+    const entityId = entityIdFrom(entity, "world.ownerOf()");
+    return this.#owners.get(entityId) ?? ServerPeerId;
+  }
+
+  setOwner(entity: number | EntityRef, peerId: PeerId): void {
+    const entityId = entityIdFrom(entity, "world.setOwner()");
+    this.#assertEntityExists(entityId, "world.setOwner()");
+    assertPeerId(peerId, "world.setOwner()");
+    this.#setOwnerInternal(entityId, peerId);
+    this.dirty.markNetworkChanged(entityId);
+  }
+
+  clearOwner(entity: number | EntityRef): void {
+    this.setOwner(entity, ServerPeerId);
+  }
+
+  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
+    assertPeerId(peerId, "world.isOwner()");
+    return this.ownerOf(entity) === peerId;
+  }
+
+  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[] {
+    assertPeerId(peerId, "world.ownedBy()");
+    const ids =
+      peerId === ServerPeerId
+        ? this.#storage.entityIds().filter((entityId) => this.ownerOf(entityId) === ServerPeerId)
+        : [...(this.#ownedEntities.get(peerId) ?? [])].sort((a, b) => a - b);
+    return ids.map((entityId) => this.#readonlyEntityRef(entityId));
   }
 
   query<TComponents extends ComponentQuery>(
@@ -904,6 +944,12 @@ class WorldCore implements QueryWorldAccess {
     return this.#storage.entityIds();
   }
 
+  _getNetworkOwners(): readonly { readonly entityId: number; readonly owner: PeerId }[] {
+    return [...this.#owners.entries()]
+      .map(([entityId, owner]) => ({ entityId, owner }))
+      .sort((a, b) => a.entityId - b.entityId);
+  }
+
   _queryRows(components: readonly ComponentSchema[]) {
     return this.#storage.queryRows(this.#componentIds(components));
   }
@@ -988,6 +1034,13 @@ class WorldCore implements QueryWorldAccess {
     this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
   }
 
+  _applyNetworkFromRemote(entityId: number, owner: PeerId): void {
+    assertEntityId(entityId, "remote snapshot");
+    assertPeerId(owner, "remote snapshot");
+    this.#ensureEntity(entityId, false);
+    this.#setOwnerInternal(entityId, owner);
+  }
+
   _applyRemoveFromRemote(entityId: number, componentId: number): void {
     assertEntityId(entityId, "remote snapshot");
     this.#storage.remove(entityId, componentId);
@@ -998,6 +1051,7 @@ class WorldCore implements QueryWorldAccess {
     this.#storage.deleteEntity(entityId);
     this.#entityRefs.delete(entityId);
     this.#readonlyEntityRefs.delete(entityId);
+    this.#clearOwnerInternal(entityId);
   }
 
   #allocateEntityId(): number {
@@ -1021,6 +1075,30 @@ class WorldCore implements QueryWorldAccess {
   #assertEntityExists(entityId: number, label: string): void {
     if (!this.#storage.hasEntity(entityId)) {
       throw new Error(`${label} requires an existing entity; create it with spawn() first`);
+    }
+  }
+
+  #setOwnerInternal(entityId: number, peerId: PeerId): void {
+    this.#clearOwnerInternal(entityId);
+    if (peerId === ServerPeerId) {
+      return;
+    }
+    this.#owners.set(entityId, peerId);
+    const entities = this.#ownedEntities.get(peerId) ?? new Set<number>();
+    entities.add(entityId);
+    this.#ownedEntities.set(peerId, entities);
+  }
+
+  #clearOwnerInternal(entityId: number): void {
+    const previous = this.#owners.get(entityId);
+    if (previous === undefined) {
+      return;
+    }
+    this.#owners.delete(entityId);
+    const entities = this.#ownedEntities.get(previous);
+    entities?.delete(entityId);
+    if (entities?.size === 0) {
+      this.#ownedEntities.delete(previous);
     }
   }
 
@@ -1462,6 +1540,16 @@ export interface HostWorld {
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
+  /** Returns the owner peer id for an entity. Server-owned entities return `0`. */
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
+  /** Sets host-authoritative owner metadata for an entity. */
+  setOwner(entity: number | EntityRef, peerId: PeerId): void;
+  /** Sets an entity back to server ownership. */
+  clearOwner(entity: number | EntityRef): void;
+  /** Returns whether a peer owns an entity. */
+  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean;
+  /** Returns read-only refs for entities currently owned by a peer. */
+  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[];
   /** Removes a component or every component in a prefab from an entity. */
   remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean;
   /** Destroys an entity and all component rows attached to it. */
@@ -1489,14 +1577,20 @@ export interface HostWorld {
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
+  /** Sends a host-to-client event to one peer id. */
+  sendTo<TFields extends FieldDefinitions>(
+    peerId: PeerId,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
   /** Sends a full snapshot to one peer or all known peers. */
   sendFullSnapshot(peer?: PeerRef): void;
   /** Sets a manual per-peer visibility override for one entity. */
-  setVisible(peer: PeerRef, entity: number | ReadonlyEntityRef, visible: boolean): void;
+  setVisible(peerId: PeerId, entity: number | ReadonlyEntityRef, visible: boolean): void;
   /** Clears one visibility override, or all overrides for a peer when no entity is passed. */
-  clearVisible(peer: PeerRef, entity?: number | ReadonlyEntityRef): void;
+  clearVisible(peerId: PeerId, entity?: number | ReadonlyEntityRef): void;
   /** Evaluates the current visibility policy for a peer/entity pair. */
-  isVisible(peer: PeerRef, entity: number | ReadonlyEntityRef): boolean;
+  isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean;
 }
 
 class HostWorldImpl implements HostWorld {
@@ -1506,10 +1600,10 @@ class HostWorldImpl implements HostWorld {
   readonly #clock: Clock;
   readonly #protocol: ProtocolDefinition;
   readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
-  readonly #visibility = new Map<PeerRef, Map<number, boolean>>();
+  readonly #visibility = new Map<PeerId, Map<number, boolean>>();
   readonly #visibilityDefault: "all" | "none";
   readonly #interestWorld: InterestWorld;
-  #interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
+  #interest?: (peerId: PeerId, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
   #started = false;
   #lastNowMs: number | undefined;
   #systemTick = 0;
@@ -1619,6 +1713,26 @@ class HostWorldImpl implements HostWorld {
     return this.#core.has(entity, componentOrPrefab);
   }
 
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId {
+    return this.#core.ownerOf(entity);
+  }
+
+  setOwner(entity: number | EntityRef, peerId: PeerId): void {
+    this.#core.setOwner(entity, peerId);
+  }
+
+  clearOwner(entity: number | EntityRef): void {
+    this.#core.clearOwner(entity);
+  }
+
+  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
+    return this.#core.isOwner(peerId, entity);
+  }
+
+  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[] {
+    return this.#core.ownedBy(peerId);
+  }
+
   remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
     return this.#core.remove(entity, componentOrPrefab);
   }
@@ -1674,6 +1788,16 @@ class HostWorldImpl implements HostWorld {
     this.#runtime.broadcast(rpc, payload);
   }
 
+  sendTo<TFields extends FieldDefinitions>(
+    peerId: PeerId,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    assertPeerId(peerId, "HostWorld.sendTo()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "HostWorld.sendTo");
+    this.#runtime.sendTo(peerId, rpc, payload);
+  }
+
   sendFullSnapshot(peer?: PeerRef): void {
     if (peer !== undefined) {
       assertPeerRef(peer, "HostWorld.sendFullSnapshot()");
@@ -1681,44 +1805,44 @@ class HostWorldImpl implements HostWorld {
     this.#runtime.sendFullSnapshot(peer);
   }
 
-  setVisible(peer: PeerRef, entity: number | ReadonlyEntityRef, visible: boolean): void {
-    assertPeerRef(peer, "HostWorld.setVisible()");
+  setVisible(peerId: PeerId, entity: number | ReadonlyEntityRef, visible: boolean): void {
+    assertPeerId(peerId, "HostWorld.setVisible()");
     const entityId = entityIdFrom(entity, "HostWorld.setVisible()");
     if (typeof visible !== "boolean") {
       throw new Error("HostWorld.setVisible() visible must be a boolean");
     }
-    const map = this.#visibility.get(peer) ?? new Map<number, boolean>();
+    const map = this.#visibility.get(peerId) ?? new Map<number, boolean>();
     map.set(entityId, visible);
-    this.#visibility.set(peer, map);
+    this.#visibility.set(peerId, map);
   }
 
-  clearVisible(peer: PeerRef, entity?: number | ReadonlyEntityRef): void {
-    assertPeerRef(peer, "HostWorld.clearVisible()");
+  clearVisible(peerId: PeerId, entity?: number | ReadonlyEntityRef): void {
+    assertPeerId(peerId, "HostWorld.clearVisible()");
     if (entity === undefined) {
-      this.#visibility.delete(peer);
+      this.#visibility.delete(peerId);
       return;
     }
 
     const entityId = entityIdFrom(entity, "HostWorld.clearVisible()");
-    const map = this.#visibility.get(peer);
+    const map = this.#visibility.get(peerId);
     if (map === undefined) {
       return;
     }
     map.delete(entityId);
     if (map.size === 0) {
-      this.#visibility.delete(peer);
+      this.#visibility.delete(peerId);
     }
   }
 
-  isVisible(peer: PeerRef, entity: number | ReadonlyEntityRef): boolean {
-    assertPeerRef(peer, "HostWorld.isVisible()");
+  isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
+    assertPeerId(peerId, "HostWorld.isVisible()");
     const entityId = entityIdFrom(entity, "HostWorld.isVisible()");
-    const override = this.#visibility.get(peer)?.get(entityId);
+    const override = this.#visibility.get(peerId)?.get(entityId);
     if (override !== undefined) {
       return override;
     }
     if (this.#interest !== undefined) {
-      const visible = this.#interest(peer, this.#core._readonlyEntityRef(entityId), this.#interestWorld);
+      const visible = this.#interest(peerId, this.#core._readonlyEntityRef(entityId), this.#interestWorld);
       if (typeof visible !== "boolean") {
         throw new Error("createHostWorld() interest must return a boolean");
       }
@@ -1753,6 +1877,7 @@ class HostWorldImpl implements HostWorld {
       get: (entity, componentOrPrefab) => this.#core.getReadonly(entity, componentOrPrefab),
       getPrefab: (entity, prefab) => this.#core.getPrefabReadonly(entity, prefab),
       has: (entity, componentOrPrefab) => this.#core.has(entity, componentOrPrefab),
+      ownerOf: (entity) => this.#core.ownerOf(entity),
       query: (...components) => this.#core.queryReadonly(...components),
       each: (components, fn) => this.#core.eachReadonly(components, fn),
     } satisfies InterestWorld);
@@ -1776,6 +1901,12 @@ export interface ClientWorld {
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
+  /** Returns the synchronized owner peer id for an entity. Server-owned entities return `0`. */
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
+  /** Returns this client's assigned peer id, or `0` before assignment. */
+  myPeerId(): PeerId;
+  /** Returns whether this client owns an entity. */
+  isMine(entity: number | ReadonlyEntityRef): boolean;
   /** Creates a lazy read-only query over one or more components. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
@@ -1861,6 +1992,18 @@ class ClientWorldImpl implements ClientWorld {
     componentOrPrefab: ComponentOrPrefab,
   ): boolean {
     return this.#core.has(entity, componentOrPrefab);
+  }
+
+  ownerOf(entity: number | ReadonlyEntityRef): PeerId {
+    return this.#core.ownerOf(entity);
+  }
+
+  myPeerId(): PeerId {
+    return this.#runtime.peerId();
+  }
+
+  isMine(entity: number | ReadonlyEntityRef): boolean {
+    return this.ownerOf(entity) === this.myPeerId();
   }
 
   query<TComponents extends ComponentQuery>(
@@ -2289,6 +2432,12 @@ function assertPeerRef(peer: unknown, label: string): asserts peer is PeerRef {
     (kind === "number" && !Number.isFinite(peer))
   ) {
     throw new Error(`${label} requires a peer ref`);
+  }
+}
+
+function assertPeerId(peerId: unknown, label: string): asserts peerId is PeerId {
+  if (typeof peerId !== "number" || !Number.isSafeInteger(peerId) || peerId < 0) {
+    throw new Error(`${label} requires a non-negative integer peer id`);
   }
 }
 

@@ -79,7 +79,7 @@ export { defineCommand, defineEvent } from "./rpc/index";
 export type {
   CommandDefinition,
   EventDefinition,
-  RpcContext,
+  RpcCtx,
   RpcDefinition,
   RpcHandler,
   RpcKind,
@@ -92,5 +92,7 @@ export type {
   Clock,
   HostTransport,
   Logger,
+  PeerId,
   PeerRef,
 } from "./platform/index";
+export { ServerPeerId } from "./platform/index";

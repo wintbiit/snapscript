@@ -230,27 +230,31 @@ export class HostPeer {
   #lastEvent: string | undefined;
 
   constructor() {
-    this.world.on(MoveCommand, (payload) => {
+    this.world.on(MoveCommand, (ctx) => {
       // Command handlers mutate host-side NetRefs; dirty snapshots are produced during world.tick().
+      const payload = ctx.payload;
       const player = this.playerState();
       player.x.value += payload.dx;
       player.y.value += payload.dy;
     });
 
-    this.world.on(DamageCommand, (payload) => {
+    this.world.on(DamageCommand, (ctx) => {
+      const payload = ctx.payload;
       const player = this.playerState();
       player.hp.value = Math.max(0, player.hp.value - payload.amount);
       player.dead.value = player.hp.value <= 0;
       this.world.broadcast(DamageEvent, { entityId: this.player.id, amount: payload.amount });
     });
 
-    this.world.on(HealCommand, (payload) => {
+    this.world.on(HealCommand, (ctx) => {
+      const payload = ctx.payload;
       const player = this.playerState();
       player.hp.value = Math.min(100, player.hp.value + payload.amount);
       player.dead.value = false;
     });
 
-    this.world.on(RotateCommand, (payload) => {
+    this.world.on(RotateCommand, (ctx) => {
+      const payload = ctx.payload;
       const player = this.playerState();
       player.yaw.value = (player.yaw.value + payload.delta + 360) % 360;
     });
@@ -300,7 +304,8 @@ export class ClientPeer {
   #lastEvent: string | undefined;
 
   constructor() {
-    this.world.on(DamageEvent, (payload) => {
+    this.world.on(DamageEvent, (ctx) => {
+      const payload = ctx.payload;
       // Events are for client effects and UI bookkeeping; replicated state still comes from snapshots.
       this.#lastEvent = `damage ${payload.amount} on #${payload.entityId}`;
     });

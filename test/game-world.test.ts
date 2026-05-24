@@ -420,22 +420,47 @@ describe("single world sync api", () => {
     expect(() => host.destroy(Number.NaN as never)).toThrow(
       /requires a positive integer entity id/,
     );
-    expect(() => host.setVisible("peer", { id: 1.5 } as never, true)).toThrow(
+    expect(() => host.setVisible(1, { id: 1.5 } as never, true)).toThrow(
       /requires a positive integer entity id/,
     );
-    expect(() => host.setVisible("peer", entity, "yes" as never)).toThrow(
+    expect(() => host.setVisible(1, entity, "yes" as never)).toThrow(
       /visible must be a boolean/,
     );
-    expect(() => host.setVisible(null as never, entity, true)).toThrow(/requires a peer ref/);
-    expect(() => host.clearVisible("peer", -1 as never)).toThrow(
+    expect(() => host.setVisible(null as never, entity, true)).toThrow(/requires a non-negative integer peer id/);
+    expect(() => host.clearVisible(1, -1 as never)).toThrow(
       /requires a positive integer entity id/,
     );
-    expect(() => host.clearVisible(undefined as never)).toThrow(/requires a peer ref/);
-    expect(() => host.isVisible("peer", {} as never)).toThrow(
+    expect(() => host.clearVisible(undefined as never)).toThrow(/requires a non-negative integer peer id/);
+    expect(() => host.isVisible(1, {} as never)).toThrow(
       /requires an entity id or entity ref/,
     );
-    expect(() => host.isVisible(Number.NaN as never, entity)).toThrow(/requires a peer ref/);
+    expect(() => host.isVisible(Number.NaN as never, entity)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.sendFullSnapshot(Number.NaN as never)).toThrow(/requires a peer ref/);
+  });
+
+  it("maintains host ownership metadata with server-owned defaults", () => {
+    const Player = defineEntity("OwnershipMetadataPlayer", {
+      hp: u16(100),
+    });
+    const protocol = defineProtocol({ prefabs: { Player } });
+    const [hostTransport] = pair();
+    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const first = host.spawn(Player);
+    const second = host.spawn(Player);
+
+    expect(host.ownerOf(first)).toBe(0);
+    expect(host.isOwner(0, first)).toBe(true);
+
+    host.setOwner(first, 1);
+    host.setOwner(second, 1);
+    expect(host.ownerOf(first)).toBe(1);
+    expect(host.isOwner(1, first)).toBe(true);
+    expect(host.ownedBy(1).map((entity) => entity.id)).toEqual([first.id, second.id]);
+
+    host.clearOwner(first);
+    expect(host.ownerOf(first)).toBe(0);
+    expect(host.ownedBy(1).map((entity) => entity.id)).toEqual([second.id]);
+    expect(() => host.setOwner(first, -1 as never)).toThrow(/requires a non-negative integer peer id/);
   });
 
   it("passes read-only entity refs into interest hooks", () => {
@@ -449,8 +474,9 @@ describe("single world sync api", () => {
       protocol,
       transport: hostTransport,
       clock: clock(),
-      interest(_peer, entity, world) {
+      interest(peerId, entity, world) {
         inspected = true;
+        expect(peerId).toBe(1);
         expect(Object.isFrozen(world)).toBe(true);
         expect(Object.isFrozen(entity)).toBe(true);
         expect(() => {
@@ -476,7 +502,7 @@ describe("single world sync api", () => {
     const entity = host.spawn();
     host.add(entity, Visible);
 
-    expect(host.isVisible("peer", entity)).toBe(true);
+    expect(host.isVisible(1, entity)).toBe(true);
     expect(inspected).toBe(true);
   });
 
@@ -491,7 +517,7 @@ describe("single world sync api", () => {
     });
     const entity = host.spawn();
 
-    expect(() => host.isVisible("peer", entity)).toThrow(
+    expect(() => host.isVisible(1, entity)).toThrow(
       /createHostWorld\(\) interest must return a boolean/,
     );
   });
@@ -554,33 +580,33 @@ describe("single world sync api", () => {
     host.spawn(Player);
     const seen: string[] = [];
 
-    host.on(Move, (payload, context) => {
-      expect(Object.isFrozen(payload)).toBe(true);
+    host.on(Move, (context) => {
+      expect(Object.isFrozen(context.payload)).toBe(true);
       expect(() => {
-        (payload as { dx: number }).dx = 1;
+        (context.payload as { dx: number }).dx = 1;
       }).toThrow();
       expect(Object.isFrozen(context)).toBe(true);
       expect(() => {
         (context as { channel: ChannelName }).channel = "unreliable";
       }).toThrow();
-      seen.push(`host:${payload.dx}:${context.channel}:${context.peer === undefined ? "no-peer" : "peer"}`);
+      seen.push(`host:${context.payload.dx}:${context.channel}:${context.sender === 0 ? "no-peer" : "peer"}`);
     });
-    host.on(Move, (payload, context) => {
-      seen.push(`host2:${payload.dx}:${context.channel}:${context.peer === undefined ? "no-peer" : "peer"}`);
+    host.on(Move, (context) => {
+      seen.push(`host2:${context.payload.dx}:${context.channel}:${context.sender === 0 ? "no-peer" : "peer"}`);
     });
-    client.on(Flash, (payload, context) => {
-      expect(Object.isFrozen(payload)).toBe(true);
+    client.on(Flash, (context) => {
+      expect(Object.isFrozen(context.payload)).toBe(true);
       expect(() => {
-        (payload as { amount: number }).amount = 99;
+        (context.payload as { amount: number }).amount = 99;
       }).toThrow();
       expect(Object.isFrozen(context)).toBe(true);
       expect(() => {
         (context as { tick: number }).tick = 99;
       }).toThrow();
-      seen.push(`client:${payload.amount}:${context.channel}`);
+      seen.push(`client:${context.payload.amount}:${context.channel}`);
     });
-    client.on(Flash, (payload, context) => {
-      seen.push(`client2:${payload.amount}:${context.channel}:${context.tick}`);
+    client.on(Flash, (context) => {
+      seen.push(`client2:${context.payload.amount}:${context.channel}:${context.tick}`);
     });
     client.onSnapshot((_world, context) => {
       expect(Object.isFrozen(context)).toBe(true);
@@ -633,12 +659,12 @@ describe("single world sync api", () => {
     const player = host.spawn(Player);
     let eventAmount = 0;
 
-    host.on(Move, (payload) => {
-      host.get(player, PlayerState)!.x.value += payload.dx;
+    host.on(Move, (ctx) => {
+      host.get(player, PlayerState)!.x.value += ctx.payload.dx;
       host.broadcast(DamageFx, { entityId: player.id, amount: 3 });
     });
-    client.on(DamageFx, (payload) => {
-      eventAmount = payload.amount;
+    client.on(DamageFx, (ctx) => {
+      eventAmount = ctx.payload.amount;
     });
 
     client.tick();
