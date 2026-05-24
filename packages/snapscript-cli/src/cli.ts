@@ -24,7 +24,6 @@ function main(argv: readonly string[]): number {
       inputPath: input,
       write: true,
       ...(options.outDir === undefined ? {} : { outDir: options.outDir }),
-      ...(options.lockPath === undefined ? {} : { lockPath: options.lockPath }),
     } as const;
     const files = generateSnapFile(generateOptions);
     for (const file of files) {
@@ -37,20 +36,14 @@ function main(argv: readonly string[]): number {
   }
 }
 
-function parseOptions(args: readonly string[]): { outDir?: string; lockPath?: string } {
-  const result: { outDir?: string; lockPath?: string } = {};
+function parseOptions(args: readonly string[]): { outDir?: string } {
+  const result: { outDir?: string } = {};
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
     const value = args[index + 1];
     if (option === "--out") {
       if (value === undefined) throw new Error("--out requires a directory");
       result.outDir = value;
-      index += 1;
-      continue;
-    }
-    if (option === "--lock") {
-      if (value === undefined) throw new Error("--lock requires a file");
-      result.lockPath = value;
       index += 1;
       continue;
     }
@@ -62,7 +55,7 @@ function parseOptions(args: readonly string[]): { outDir?: string; lockPath?: st
 function printUsage(): void {
   console.error("Usage:");
   console.error("  snapscript check <schema.snap>");
-  console.error("  snapscript generate <schema.snap> [--out <dir>] [--lock <file>]");
+  console.error("  snapscript generate <schema.snap> [--out <dir>]");
 }
 
 process.exitCode = main(process.argv.slice(2));

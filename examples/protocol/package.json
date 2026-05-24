@@ -4,15 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate": "snapscript generate example.snap",
-    "check": "snapscript check example.snap",
-    "build": "pnpm generate && tsc --noEmit"
-  },
-  "dependencies": {
-    "snapscript": "workspace:*"
-  },
-  "devDependencies": {
-    "snapscript-cli": "workspace:*",
-    "typescript": "^5.9.3"
+    "check": "pnpm --dir core check",
+    "generate": "pnpm --dir core generate",
+    "build": "pnpm --dir core build && pnpm --dir app build",
+    "dev": "pnpm --dir core generate && pnpm --dir app dev"
   }
 }

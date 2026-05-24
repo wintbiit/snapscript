@@ -57,7 +57,8 @@ deterministic ids that are obvious from the `.snap` file.
 
 Rules:
 
-- Component, entity, command, and event declaration order is the generated id source.
+- Component and entity declaration order is the generated id source.
+- Commands and events share one RPC id namespace, assigned by service/RPC declaration order.
 - Field order inside a component, command, or event is the field id source.
 - New fields should be appended.
 - Reordering fields or declarations is a breaking protocol change.
@@ -125,7 +126,7 @@ Peggy; they import only the SnapScript runtime API.
 
 ## v1 Language Surface
 
-The v1 syntax is represented by `examples/protocol/example.snap`:
+The v1 syntax is represented by `examples/protocol/game.snap`:
 
 ```snap
 syntax = "v1"

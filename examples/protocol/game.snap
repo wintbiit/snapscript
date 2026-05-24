@@ -6,12 +6,12 @@ struct Vector2 {
 }
 
 component Position {
-    Vector2
-    hidden: bool(default: false)
+  Vector2
+  hidden: bool(default: false)
 }
 
 component Health {
-    hp: u16(100)
+  hp: u16(100)
 }
 
 entity Player {
@@ -25,6 +25,6 @@ struct MoveInput {
 }
 
 service Movement {
-    command Move(input: MoveInput) unreliable
-    event MoveDisabled(disabled: bool) reliable
+  command Move(input: MoveInput) unreliable
+  event MoveDisabled(disabled: bool) reliable
 }

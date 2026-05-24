@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   defineCommand,
   defineEntity,
@@ -343,6 +343,43 @@ describe("sync runtime", () => {
 
     expect(handled).toBe(true);
     expect(errors[0]).toContain("RPC handler failed:RuntimeIsolatedMoveCommand:move failed");
+  });
+
+  it("uses console-backed logging when no logger is provided", () => {
+    const Move = defineCommand("RuntimeDefaultLoggerMoveCommand", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const registry = createRegistry().registerRpc(Move);
+    const serverWorld = createTestServerWorld(testProtocol(Move));
+    const clientWorld = createTestClientWorld(testProtocol(Move));
+    const [serverTransport, clientTransport] = pair();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+    });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+    });
+    try {
+      host.on(Move, () => {
+        throw new Error("default logger failure");
+      });
+
+      client.send(Move, { dx: 0.5 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        "RPC handler failed",
+        expect.objectContaining({ error: "default logger failure", rpc: Move.name }),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("broadcasts events to client handlers without dirtying world", () => {

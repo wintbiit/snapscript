@@ -30,10 +30,41 @@ export interface Clock {
   tick(): number;
 }
 
-/** Optional structured logger used for isolated handler and packet errors. */
-export interface Logger {
+/** Structured logger used for isolated handler and packet errors. */
+export interface ILogger {
   debug?(message: string, context?: Record<string, unknown>): void;
   info?(message: string, context?: Record<string, unknown>): void;
   warn?(message: string, context?: Record<string, unknown>): void;
   error?(message: string, context?: Record<string, unknown>): void;
+}
+
+/** Backward-compatible logger type alias. */
+export type Logger = ILogger;
+
+export const defaultLogger: ILogger = Object.freeze({
+  debug(message: string, context?: Record<string, unknown>) {
+    writeConsole("debug", message, context);
+  },
+  info(message: string, context?: Record<string, unknown>) {
+    writeConsole("info", message, context);
+  },
+  warn(message: string, context?: Record<string, unknown>) {
+    writeConsole("warn", message, context);
+  },
+  error(message: string, context?: Record<string, unknown>) {
+    writeConsole("error", message, context);
+  },
+});
+
+function writeConsole(
+  level: "debug" | "info" | "warn" | "error",
+  message: string,
+  context: Record<string, unknown> | undefined,
+): void {
+  const writer = console[level] ?? console.log;
+  if (context === undefined) {
+    writer(message);
+    return;
+  }
+  writer(message, context);
 }

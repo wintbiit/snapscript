@@ -1,4 +1,4 @@
-import { ServerPeerId, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
+import { ServerPeerId, defaultLogger, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
 import { decodeRpc, encodeRpc } from "../rpc/index";
 import type { RpcCtx, RpcDefinition, RpcHandler } from "../rpc/index";
@@ -168,6 +168,7 @@ class HandlerTable {
 }
 
 export function createSyncServer(options: SyncServerOptions): SyncServer {
+  const logger = options.logger ?? defaultLogger;
   const handlers = new HandlerTable();
   const peers = new Set<PeerRef>();
   const peerIds = new PeerIds();
@@ -206,12 +207,12 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
             rpc: decoded.rpc,
             sender: peerId,
           },
-          options.logger,
+          logger,
         );
         return;
       }
     } catch (error) {
-      logError(options.logger, "Failed to handle server packet", error);
+      logError(logger, "Failed to handle server packet", error);
     }
   });
 
@@ -420,6 +421,7 @@ function updateOpsKey(
 }
 
 export function createSyncClient(options: SyncClientOptions): SyncClient {
+  const logger = options.logger ?? defaultLogger;
   const handlers = new HandlerTable();
   let assignedPeerId: PeerId = ServerPeerId;
 
@@ -450,12 +452,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             rpc: decoded.rpc,
             sender: ServerPeerId,
           },
-          options.logger,
+          logger,
         );
         return;
       }
     } catch (error) {
-      logError(options.logger, "Failed to handle client packet", error);
+      logError(logger, "Failed to handle client packet", error);
     }
   });
 

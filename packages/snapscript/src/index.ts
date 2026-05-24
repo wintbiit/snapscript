@@ -90,6 +90,7 @@ export type {
   ChannelName,
   ClientTransport,
   Clock,
+  ILogger,
   ServerTransport,
   Logger,
   PeerId,

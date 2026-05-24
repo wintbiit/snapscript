@@ -1,0 +1,23 @@
+{
+  "name": "@snapscript/example-protocol-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "snapscript check ../game.snap",
+    "generate": "snapscript generate ../game.snap --out src/generated/snapscript",
+    "build": "pnpm generate && tsc --noEmit && vitest run"
+  },
+  "dependencies": {
+    "snapscript": "workspace:*"
+  },
+  "devDependencies": {
+    "snapscript-cli": "workspace:*",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./generated/snapscript/protocol": "./src/generated/snapscript/protocol.ts"
+  }
+}

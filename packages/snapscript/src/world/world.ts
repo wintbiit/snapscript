@@ -1,4 +1,4 @@
-import { ServerPeerId, type PeerId } from "../platform/index";
+import { ServerPeerId, defaultLogger, type PeerId } from "../platform/index";
 import type {
   ChannelName,
   ClientTransport,
@@ -1941,7 +1941,7 @@ class ClientWorldImpl implements ClientWorld {
   readonly #transport: QueuedClientTransport;
   readonly #runtime: SyncClient;
   readonly #clock: Clock;
-  readonly #logger: Logger | undefined;
+  readonly #logger: Logger;
   readonly #protocol: ProtocolDefinition;
   readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
   readonly #snapshotHandlers = new Set<SnapshotHandler<ClientWorld>>();
@@ -1956,7 +1956,7 @@ class ClientWorldImpl implements ClientWorld {
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
     this.#clock = clock;
-    this.#logger = options.logger;
+    this.#logger = options.logger ?? defaultLogger;
     this.#transport = new QueuedClientTransport(options.transport);
     this.#runtime = createSyncClient(
       clientRuntimeOptions(this, this.#transport, options, clock, (context) =>
@@ -2072,7 +2072,7 @@ class ClientWorldImpl implements ClientWorld {
       try {
         handler(this, frozenContext);
       } catch (error) {
-        this.#logger?.error?.("ClientWorld snapshot handler failed", {
+        this.#logger.error?.("ClientWorld snapshot handler failed", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2110,20 +2110,15 @@ function serverRuntimeOptions(
   clock: Clock,
   canReusePeerSnapshots: () => boolean,
 ): SyncServerOptions {
-  const extra: { logger?: Logger } = {};
-  if (options.logger !== undefined) {
-    extra.logger = options.logger;
-  }
-
   return {
     world,
     transport,
     clock,
     registry: registryFromOptions(options),
+    logger: options.logger ?? defaultLogger,
     isVisible: (peer, entityId) => world.isVisible(peer, entityId),
     canReusePeerSnapshots,
     snapshotEncoding: options.snapshotEncoding ?? "default",
-    ...extra,
   };
 }
 
@@ -2134,18 +2129,13 @@ function clientRuntimeOptions(
   clock: Clock,
   onSnapshot: (context: SnapshotContext) => void,
 ): SyncRuntimeOptions {
-  const extra: { logger?: Logger } = {};
-  if (options.logger !== undefined) {
-    extra.logger = options.logger;
-  }
-
   return {
     world,
     transport,
     clock,
     registry: registryFromOptions(options),
+    logger: options.logger ?? defaultLogger,
     onSnapshot,
-    ...extra,
   };
 }
 

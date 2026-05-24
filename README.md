@@ -137,7 +137,7 @@ pnpm example:ecs:dev
 
 Open `/server` and `/client` in separate browser tabs. The examples show the intended layering:
 
-- `examples/protocol` shows `.snap` check/generate, stable lock ids, generated protocol exports, and typed RPC helpers
+- `examples/protocol` shows `.snap` check/generate, order-derived ids, generated protocol exports, and typed RPC helpers
 - server/client worlds are created directly by the server app
 - transports only deliver `Uint8Array` packets and channel labels
 - commands express client intent
@@ -287,13 +287,13 @@ Definitions are frozen and fail fast:
 Handwritten definitions are still the runtime foundation. For larger projects, `.snap` files provide a declaration-first workflow that generates the same runtime calls plus typed RPC helpers:
 
 ```sh
-snapscript check examples/protocol/example.snap
-snapscript generate examples/protocol/example.snap
+snapscript check examples/protocol/game.snap
+snapscript generate examples/protocol/game.snap --out examples/protocol/core/src/generated/snapscript
 ```
 
 `generate` writes generated TypeScript protocol/RPC bindings and a manifest. The project-style target
 uses `.snap` declaration order and field order as the generated id source; reordering is a breaking
-protocol change. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/example.snap](examples/protocol/example.snap).
+protocol change. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/game.snap](examples/protocol/game.snap).
 
 ## RPC
 

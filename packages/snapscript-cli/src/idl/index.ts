@@ -69,7 +69,7 @@ interface Arg {
   readonly value: string | number | boolean;
 }
 
-interface LockFile {
+interface Manifest {
   readonly components?: Record<string, LockedDef>;
   readonly entities?: Record<string, LockedDef>;
   readonly commands?: Record<string, LockedDef>;
@@ -89,7 +89,6 @@ interface GeneratedFile {
 interface GenerateOptions {
   readonly inputPath: string;
   readonly outDir?: string;
-  readonly lockPath?: string;
   readonly write?: boolean;
 }
 
@@ -140,16 +139,13 @@ export function checkSnap(source: string): SnapAst {
 
 export function generateSnap(source: string, options: GenerateOptions): readonly GeneratedFile[] {
   const ast = checkSnap(source);
-  const lockPath = options.lockPath ?? join(dirname(options.inputPath), "snapscript.lock.json");
   const outDir = options.outDir ?? join(dirname(options.inputPath), "generated");
-  const lock = readLock(lockPath);
-  const nextLock = completeLock(ast, lock);
+  const manifest = buildManifest(ast);
   const context = buildContext(ast);
-  const protocol = emitProtocol(context, nextLock);
+  const protocol = emitProtocol(context, manifest);
   const files = [
     { path: join(outDir, "protocol.ts"), content: protocol },
-    { path: join(outDir, "manifest.json"), content: `${JSON.stringify(manifestForLock(nextLock), null, 2)}\n` },
-    { path: lockPath, content: `${JSON.stringify(nextLock, null, 2)}\n` },
+    { path: join(outDir, "manifest.json"), content: `${JSON.stringify(manifest, null, 2)}\n` },
   ];
   if (options.write === true) {
     for (const file of files) {
@@ -268,60 +264,52 @@ const fieldHelpers = new Set([
   "vec3q",
 ]);
 
-function readLock(path: string): LockFile {
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as LockFile;
-  } catch {
-    return {};
-  }
-}
-
-function completeLock(ast: SnapAst, existing: LockFile): Required<LockFile> {
-  const lock = {
-    components: { ...(existing.components ?? {}) },
-    entities: { ...(existing.entities ?? {}) },
-    commands: { ...(existing.commands ?? {}) },
-    events: { ...(existing.events ?? {}) },
+function buildManifest(ast: SnapAst): Required<Manifest> {
+  const manifest: Required<Manifest> = {
+    components: {},
+    entities: {},
+    commands: {},
+    events: {},
   };
   const context = buildContext(ast);
+  let componentId = 1;
   for (const component of context.components.values()) {
-    ensureDef(lock.components, component.name, expandComponentBody(component.body, context.structs, [component.name]));
+    manifest.components[component.name] = {
+      id: componentId,
+      fields: fieldIdsFor(expandComponentBody(component.body, context.structs, [component.name])),
+    };
+    componentId += 1;
   }
+  let entityId = 1;
   for (const entity of context.entities.values()) {
-    ensureDef(lock.entities, entity.name);
+    manifest.entities[entity.name] = { id: entityId };
+    entityId += 1;
   }
+  let rpcId = 1;
   for (const service of context.services.values()) {
     for (const rpc of service.rpcs) {
       const name = `${service.name}.${rpc.name}`;
-      ensureDef(lock[rpc.kind === "command" ? "commands" : "events"], name, expandRpcFields(rpc, context.structs));
+      const target = rpc.kind === "command" ? manifest.commands : manifest.events;
+      target[name] = {
+        id: rpcId,
+        fields: fieldIdsFor(expandRpcFields(rpc, context.structs)),
+      };
+      rpcId += 1;
     }
   }
-  return lock;
+  return manifest;
 }
 
-function ensureDef(map: Record<string, LockedDef>, name: string, fields?: readonly FieldItem[]): void {
-  const existing = map[name];
-  const id = existing?.id ?? nextId(map);
-  const fieldIds = { ...(existing?.fields ?? {}) };
-  if (fields !== undefined) {
-    for (const field of fields) {
-      fieldIds[field.name] ??= nextFieldId(fieldIds);
-    }
-  }
-  map[name] = fields === undefined ? { id } : { id, fields: fieldIds };
+function fieldIdsFor(fields: readonly FieldItem[]): Record<string, number> {
+  const fieldIds: Record<string, number> = {};
+  fields.forEach((field, index) => {
+    if (index > 31) throw new Error("SnapScript v1 supports at most 32 fields per definition");
+    fieldIds[field.name] = index;
+  });
+  return fieldIds;
 }
 
-function nextId(map: Record<string, LockedDef>): number {
-  return Math.max(0, ...Object.values(map).map((item) => item.id)) + 1;
-}
-
-function nextFieldId(fields: Record<string, number>): number {
-  const next = Math.max(-1, ...Object.values(fields)) + 1;
-  if (next > 31) throw new Error("SnapScript v1 supports at most 32 fields per definition");
-  return next;
-}
-
-function emitProtocol(context: ReturnType<typeof buildContext>, lock: Required<LockFile>): string {
+function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Required<Manifest>): string {
   const helpers = new Set<string>(["defineComponent", "defineEntity", "defineCommand", "defineEvent", "defineProtocol"]);
   for (const struct of context.structs.values()) {
     for (const field of expandComponentBody(struct.body, context.structs, [struct.name])) helpers.add(field.type.name);
@@ -349,11 +337,11 @@ function emitProtocol(context: ReturnType<typeof buildContext>, lock: Required<L
   }
   for (const component of context.components.values()) {
     const fields = expandComponentBody(component.body, context.structs, [component.name]);
-    lines.push(`export const ${component.name} = defineComponent(${JSON.stringify(component.name)}, ${emitFields(fields)}, { id: ${lock.components[component.name]!.id}, fieldIds: ${JSON.stringify(lock.components[component.name]!.fields)} });`);
+    lines.push(`export const ${component.name} = defineComponent(${JSON.stringify(component.name)}, ${emitFields(fields)}, { id: ${manifest.components[component.name]!.id}, fieldIds: ${JSON.stringify(manifest.components[component.name]!.fields)} });`);
   }
   if (context.components.size > 0) lines.push("");
   for (const entity of context.entities.values()) {
-    lines.push(`export const ${entity.name} = defineEntity(${JSON.stringify(entity.name)}, { ${entity.components.map((item) => `${item.name}: ${item.component}`).join(", ")} }, { id: ${lock.entities[entity.name]!.id} });`);
+    lines.push(`export const ${entity.name} = defineEntity(${JSON.stringify(entity.name)}, { ${entity.components.map((item) => `${item.name}: ${item.component}`).join(", ")} }, { id: ${manifest.entities[entity.name]!.id} });`);
   }
   if (context.entities.size > 0) lines.push("");
   const commandNames: string[] = [];
@@ -362,11 +350,11 @@ function emitProtocol(context: ReturnType<typeof buildContext>, lock: Required<L
     for (const rpc of service.rpcs) {
       const runtimeName = `${service.name}.${rpc.name}`;
       const exportName = `${service.name}${rpc.name}`;
-      const lockMap = rpc.kind === "command" ? lock.commands : lock.events;
+      const manifestMap = rpc.kind === "command" ? manifest.commands : manifest.events;
       const factory = rpc.kind === "command" ? "defineCommand" : "defineEvent";
       const collection = rpc.kind === "command" ? commandNames : eventNames;
       collection.push(exportName);
-      lines.push(`export const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs))}, { id: ${lockMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(lockMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
+      lines.push(`export const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs))}, { id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
     }
   }
   if (commandNames.length + eventNames.length > 0) lines.push("");
@@ -419,8 +407,4 @@ const objectOptionFieldHelpers = new Set(["qf32", "vec2q", "vec3q"]);
 
 function emitRpcBindings(commands: readonly string[], events: readonly string[]): string {
   return `export const rpc = {\n  commands: {\n${commands.map((name) => `    ${name}: {\n      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.send(${name}, payload); },\n      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n  events: {\n${events.map((name) => `    ${name}: {\n      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.broadcast(${name}, payload); },\n      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof ${name}>>) { world.sendTo(peerId, ${name}, payload); },\n      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n} as const;`;
-}
-
-function manifestForLock(lock: Required<LockFile>): Required<LockFile> {
-  return lock;
 }

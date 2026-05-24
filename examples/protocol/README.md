@@ -1,16 +1,24 @@
-# SnapScript Protocol IDL Example
+# SnapScript Protocol Project Example
 
-This example shows the declaration-first workflow:
+This example shows the confirmed project shape:
+
+- `game.snap` is the root protocol source.
+- `core/` is the platform-neutral game core package.
+- `app/` is a browser/Vite platform package that depends on the core package.
 
 ```sh
 pnpm --dir examples/protocol generate
 pnpm --dir examples/protocol build
+pnpm --dir examples/protocol dev
 ```
 
-`example.snap` is the source of truth. The generator writes:
+The core package contains:
 
-- `generated/protocol.ts` - runtime definitions and typed RPC helpers
-- `generated/manifest.json` - stable ids for diagnostics
-- `snapscript.lock.json` - stable component/entity/RPC/field ids
+- `src/generated/snapscript/protocol.ts` and `manifest.json`
+- user RPC handlers under `src/rpc/server/` and `src/rpc/client/`
+- generated registries under `src/generated/snapscript/rpc.ts` and `src/systems/generated/`
+- `src/create-server.ts` and `src/create-client.ts`
+- a test-only in-memory transport under `src/transport/memory.ts`
 
-`src/demo.ts` imports only the generated TypeScript and the public SnapScript world API. It creates a server world and a client world, spawns a generated `Player`, sends a generated `Movement.Move` command, and handles a generated `Movement.MoveDisabled` event through the generated `rpc` helpers.
+The app package supplies the platform layer: WebSocket transport, browser clock, tick loop, input
+buttons, and rendering. It intentionally does not own protocol definitions or gameplay RPC logic.

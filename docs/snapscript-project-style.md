@@ -146,7 +146,8 @@ It does not define:
 
 Stable ids are deliberately simple:
 
-- component, entity, command, and event declaration order is the generated id source
+- component and entity declaration order is the generated id source
+- commands and events share one RPC id namespace, assigned by service/RPC declaration order
 - field order inside a component, command, or event is the field id source
 - new fields should be appended
 - reordering fields or declarations is a breaking protocol change
@@ -239,8 +240,9 @@ Recommended default:
 export function moveCommand(world: ServerWorld, ctx: RpcCtx<MovePayload>): void;
 ```
 
-Logger is still worth discussing separately. For now, logger stays in world options; generated user
-logic should not receive a broad `svc` object by default.
+Logger stays in world options; generated user logic should not receive a broad `svc` object by
+default. The framework exposes `ILogger`/`Logger`, and when no logger is passed the runtime uses a
+console-backed default logger for isolated handler/runtime errors.
 
 ## Systems
 
@@ -603,5 +605,4 @@ Items still needing implementation detail:
 - how stale logic/system files are reported
 - whether `generate` should format generated code
 - whether to include a minimal test fixture in generated projects
-- whether logger should stay only in world options or get a tiny generated helper
 - exact platform integration examples for puerts, Node, and browser packages

@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "useDefineForClassFields": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "paths": {
+      "snapscript": ["../../../packages/snapscript/src/index.ts"],
+      "@snapscript/example-protocol-core": ["../core/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}
