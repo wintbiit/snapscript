@@ -12,17 +12,6 @@ import {
   u16,
 } from "../src/index";
 import { encodeDirty } from "../src/sync/index";
-import {
-  MapComponentStorage,
-  SparseSetComponentStorage,
-  type ComponentDeltaWriter,
-  type ComponentRecordFactory,
-  type ComponentStorage,
-} from "../src/world/storage";
-
-const createHostWorldForStorageBenchmark = await import("../src/world/world")
-  .then((module) => module.createHostWorldForStorageBenchmark)
-  .catch(() => undefined);
 
 interface MemorySample {
   readonly scenario: string;
@@ -69,7 +58,7 @@ interface MemorySummary {
   };
 }
 
-type BenchmarkStorage = ComponentStorage & Partial<ComponentRecordFactory & ComponentDeltaWriter>;
+type BenchmarkStorage = never;
 
 const ITERATIONS = Math.max(
   1,
@@ -96,21 +85,8 @@ const Health = defineComponent("MemBenchHealth", {
 });
 
 const memProtocol = defineProtocol({ components: { Position, Velocity, Health } });
-const SlotBackedComponentStorage = await import("../src/world/slot-storage")
-  .then((module) => module.SlotBackedComponentStorage)
-  .catch(() => undefined);
-
 const storageVariants: Array<readonly [string, () => BenchmarkStorage | undefined]> = [];
 storageVariants.push(["default storage", () => undefined]);
-
-if (createHostWorldForStorageBenchmark !== undefined) {
-  storageVariants.push(["map storage", () => new MapComponentStorage()]);
-  storageVariants.push(["sparse storage", () => new SparseSetComponentStorage({ archetypeIndex: false })]);
-  storageVariants.push(["sparse+archetype storage", () => new SparseSetComponentStorage()]);
-  if (SlotBackedComponentStorage !== undefined) {
-    storageVariants.push(["slot-backed storage", () => new SlotBackedComponentStorage()]);
-  }
-}
 
 class MemoryHostTransport implements HostTransport {
   send(_peer: PeerRef, _channel: ChannelName, _bytes: Uint8Array): void {}
@@ -132,36 +108,14 @@ function clock(): Clock {
   };
 }
 
-function buildWorld(entityCount: number, storage: BenchmarkStorage | undefined): HostWorld {
-  if (storage === undefined || createHostWorldForStorageBenchmark === undefined) {
-    const world = createHostWorld(
-      {
-        protocol: memProtocol,
-        transport: new MemoryHostTransport(),
-        clock: clock(),
-      },
-    );
-
-    for (let entityId = 1; entityId <= entityCount; entityId += 1) {
-      const entity = world.spawn();
-      world.add(entity, Position, { x: entityId, y: -entityId });
-      world.add(entity, Velocity, { x: 1, y: -1 });
-      world.add(entity, Health, { hp: 100 });
-    }
-    return world;
-  }
-
-  const world = createHostWorldForStorageBenchmark(
+function buildWorld(entityCount: number, _storage: BenchmarkStorage | undefined): HostWorld {
+  const world = createHostWorld(
     {
       protocol: memProtocol,
       transport: new MemoryHostTransport(),
       clock: clock(),
     },
-    storage,
   );
-  if (storage === undefined) {
-    throw new Error("Storage variant requires storage-aware benchmark mode.");
-  }
 
   for (let entityId = 1; entityId <= entityCount; entityId += 1) {
     const entity = world.spawn();

@@ -40,10 +40,7 @@ import { NetRefImpl, type NetRef, type ReadonlyNetRef } from "./net-ref";
 import type { ComponentRecord } from "./records";
 import {
   SparseSetComponentStorage,
-  type ComponentDeltaWriter,
   type ComponentQueryRow,
-  type ComponentRecordFactory,
-  type ComponentStorage,
 } from "./storage";
 
 /** Mutable component instance returned from host-world reads. Write replicated fields through `NetRef.value`. */

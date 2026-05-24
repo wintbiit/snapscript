@@ -66,9 +66,8 @@ Keep examples aligned with these user paths:
 
 Performance experiments should be tied back to those same user paths:
 
-- `examples/ecs` host movement maps to `each+mutate`, `slot-backed world each+mutate`, and the SOA movement prototypes.
+- `examples/ecs` host movement maps to `each+mutate` and the example-derived movement benchmark.
 - `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
-- `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, host dirty fanout, and slot-backed host dirty fanout benchmarks.
-- bitECS-inspired SOA prototypes are upper-bound comparisons only: they mutate entity-id indexed columns directly, while the public example must keep `world.each()`, readonly clients, dirty snapshots, and schema codecs.
+- `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, client apply, and host dirty fanout benchmarks.
 
 When public APIs change, update the examples first, then run `pnpm test:examples`, `pnpm example:simple:build`, and `pnpm example:ecs:build`.
