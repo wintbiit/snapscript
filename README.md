@@ -540,5 +540,4 @@ The command should not find those internal names.
 
 ## License
 
-SnapScript is licensed under the GNU General Public License version 3. See [LICENSE](./LICENSE) for
-the full license text.
+SnapScript is licensed under the Apache License 2.0. See [LICENSE](./LICENSE) for the full license text.

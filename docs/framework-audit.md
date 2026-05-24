@@ -56,7 +56,7 @@ Important coverage:
   hooks.
 - User-facing docs now include install, get started, examples, boundary, roles, ECS API, transport,
   visibility, performance, development checks, and license.
-- GPLv3 full license text is present.
+- Apache License 2.0 full license text is present.
 - Experimental SOA/bitECS branches and cross-workspace benchmark scripts have been removed from the
   active worktree.
 

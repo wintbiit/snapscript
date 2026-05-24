@@ -2,7 +2,7 @@
   "name": "snapscript-monorepo",
   "version": "0.0.0",
   "description": "SnapScript workspace.",
-  "license": "GPL-3.0-only",
+  "license": "Apache-2.0",
   "type": "module",
   "private": true,
   "scripts": {
