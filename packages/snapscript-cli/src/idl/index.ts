@@ -337,7 +337,7 @@ function emitProtocol(context: ReturnType<typeof buildContext>, lock: Required<L
 
   const lines: string[] = [
     `import { ${[...helpers].sort().join(", ")} } from "snapscript";`,
-    `import type { ClientWorld, CommandDefinition, EventDefinition, FieldDefinitions, FieldValues, HostWorld, PeerId, RpcHandler } from "snapscript";`,
+    `import type { ClientWorld, CommandDefinition, EventDefinition, FieldDefinitions, FieldValues, ServerWorld, PeerId, RpcHandler } from "snapscript";`,
     "",
     `type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : never;`,
     `type RpcPayload<T> = FieldValues<RpcFields<T> & FieldDefinitions>;`,
@@ -418,7 +418,7 @@ function emitType(type: TypeExpr): string {
 const objectOptionFieldHelpers = new Set(["qf32", "vec2q", "vec3q"]);
 
 function emitRpcBindings(commands: readonly string[], events: readonly string[]): string {
-  return `export const rpc = {\n  commands: {\n${commands.map((name) => `    ${name}: {\n      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.send(${name}, payload); },\n      on(world: HostWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n  events: {\n${events.map((name) => `    ${name}: {\n      broadcast(world: HostWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.broadcast(${name}, payload); },\n      sendTo(world: HostWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof ${name}>>) { world.sendTo(peerId, ${name}, payload); },\n      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n} as const;`;
+  return `export const rpc = {\n  commands: {\n${commands.map((name) => `    ${name}: {\n      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.send(${name}, payload); },\n      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n  events: {\n${events.map((name) => `    ${name}: {\n      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof ${name}>>) { world.broadcast(${name}, payload); },\n      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof ${name}>>) { world.sendTo(peerId, ${name}, payload); },\n      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) { return world.on(${name}, handler); },\n    },`).join("\n")}\n  },\n} as const;`;
 }
 
 function manifestForLock(lock: Required<LockFile>): Required<LockFile> {

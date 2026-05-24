@@ -1,7 +1,7 @@
 import {
   bool,
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -15,10 +15,10 @@ import {
   type Clock,
   type ComponentQuery,
   type EntityRef,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
   type ClientWorld,
-  type HostWorld,
+  type ServerWorld,
   type ReplicatedStateReader,
 } from "snapscript";
 
@@ -240,10 +240,10 @@ class WebSocketTransport implements EcsDemoTransport {
   }
 }
 
-export class HostDemo {
+export class ServerDemo {
   readonly clock: BrowserClock;
   readonly #transport: EcsDemoTransport;
-  readonly world: HostWorld;
+  readonly world: ServerWorld;
   readonly player: EntityRef;
   readonly npc: EntityRef;
   #lastEvent: string | undefined;
@@ -252,7 +252,7 @@ export class HostDemo {
   constructor(transport: EcsDemoTransport = new WebSocketTransport(), clock = new BrowserClock()) {
     this.#transport = transport;
     this.clock = clock;
-    this.world = createHostWorld({
+    this.world = createServerWorld({
       protocol,
       transport: this.#transport,
       clock: this.clock,
@@ -262,7 +262,7 @@ export class HostDemo {
       snapshotEncoding: "batched",
     });
 
-    // Host constructs and owns all authoritative entities.
+    // Server constructs and owns all authoritative entities.
     this.player = this.world.spawn(Player, {
       position: { x: -4, y: 0 },
       health: { hp: 100 },
@@ -285,7 +285,7 @@ export class HostDemo {
     });
 
     this.world.on(MoveCommand, (ctx) => {
-      // Commands are intent; the host decides how intent changes replicated state.
+      // Commands are intent; the server decides how intent changes replicated state.
       const payload = ctx.payload;
       const vel = this.world.get(this.player, Velocity);
       if (vel !== undefined) {
@@ -320,7 +320,7 @@ export class HostDemo {
 
   runBenchmark(): void {
     // Local micro-benchmark for the public ECS loop, separate from the repository benchmark suite.
-    const bench = createHostWorld({
+    const bench = createServerWorld({
       protocol,
       transport: this.#transport,
       clock: this.clock,

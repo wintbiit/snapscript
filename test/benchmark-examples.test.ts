@@ -6,11 +6,11 @@ import type {
   ClientWorld,
   ClientTransport,
   ComponentQuery,
-  HostTransport,
-  HostWorld,
+  ServerTransport,
+  ServerWorld,
   PeerRef,
 } from "snapscript";
-import { createClientWorld, createHostWorld } from "snapscript";
+import { createClientWorld, createServerWorld } from "snapscript";
 import {
   Health,
   Player,
@@ -50,13 +50,13 @@ interface EcsBenchMode {
 }
 
 interface EcsBenchPair {
-  readonly host: HostWorld;
+  readonly host: ServerWorld;
   readonly client: ClientWorld;
-  readonly hostTransport: ExampleBenchTransport;
+  readonly serverTransport: ExampleBenchTransport;
   readonly clientTransport: ExampleBenchTransport;
 }
 
-class ExampleBenchTransport implements ClientTransport, HostTransport {
+class ExampleBenchTransport implements ClientTransport, ServerTransport {
   peer?: ExampleBenchTransport;
   readonly peerId: PeerRef = {};
   connected = true;
@@ -210,15 +210,15 @@ function median(values: readonly number[]): number {
 }
 
 function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): EcsBenchPair {
-  const [hostTransport, clientTransport] = transportPair();
+  const [serverTransport, clientTransport] = transportPair();
   const hostOptions = {
     protocol,
-    transport: hostTransport,
+    transport: serverTransport,
     clock: new ExampleBenchClock(),
     visibility: "all",
     ...(mode.snapshotEncoding === undefined ? {} : { snapshotEncoding: mode.snapshotEncoding }),
-  } as Parameters<typeof createHostWorld>[0];
-  const host = createHostWorld({
+  } as Parameters<typeof createServerWorld>[0];
+  const host = createServerWorld({
     ...hostOptions,
   });
   const client = createClientWorld({
@@ -236,15 +236,15 @@ function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): EcsBench
   client.tick();
   host.tick();
   client.tick();
-  hostTransport.resetCounters();
+  serverTransport.resetCounters();
   clientTransport.resetCounters();
-  return { host, client, hostTransport, clientTransport };
+  return { host, client, serverTransport, clientTransport };
 }
 
 const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
 const RenderQuery = [Position, Health] as const satisfies ComponentQuery;
 
-function seedDefaultExampleActors(world: HostWorld): void {
+function seedDefaultExampleActors(world: ServerWorld): void {
   world.spawn(Player, {
     position: { x: -4, y: 0 },
     health: { hp: 100 },
@@ -257,7 +257,7 @@ function seedDefaultExampleActors(world: HostWorld): void {
   });
 }
 
-function seedExtraExampleActors(world: HostWorld, count: number): void {
+function seedExtraExampleActors(world: ServerWorld, count: number): void {
   for (let index = 0; index < count; index += 1) {
     world.spawn(Player, {
       position: {
@@ -275,7 +275,7 @@ function seedExtraExampleActors(world: HostWorld, count: number): void {
   }
 }
 
-function runExampleMovement(world: HostWorld): number {
+function runExampleMovement(world: ServerWorld): number {
   let rows = 0;
   world.each(MovementQuery, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
@@ -295,16 +295,16 @@ function countExampleRenderViews(world: ClientWorld): number {
   return rows;
 }
 
-function runNetworkedFrame(host: HostWorld, client: ClientWorld): number {
+function runNetworkedFrame(host: ServerWorld, client: ClientWorld): number {
   host.tick();
   client.tick();
   return countExampleRenderViews(client);
 }
 
-function runHostTickSend(host: HostWorld, hostTransport: ExampleBenchTransport): number {
-  hostTransport.resetCounters();
+function runServerTickSend(host: ServerWorld, serverTransport: ExampleBenchTransport): number {
+  serverTransport.resetCounters();
   host.tick();
-  return hostTransport.sent;
+  return serverTransport.sent;
 }
 
 function runClientTickApply(client: ClientWorld): void {
@@ -337,7 +337,7 @@ function formatMs(value: number): string {
 }
 
 describe("example-derived benchmark", () => {
-  it("measures ECS example host, sync, and render paths", async () => {
+  it("measures ECS example server, sync, and render paths", async () => {
     const rows: ExampleBenchRow[] = [];
     const modes: EcsBenchMode[] = [
       { label: "default-compatible" },
@@ -380,7 +380,7 @@ describe("example-derived benchmark", () => {
 
         let hostSendPair = createEcsBenchPair(extraEntities, mode);
         const hostSend = await sample(
-          () => runHostTickSend(hostSendPair.host, hostSendPair.hostTransport),
+          () => runServerTickSend(hostSendPair.host, hostSendPair.serverTransport),
           DEFAULT_SAMPLES,
           1,
           DEFAULT_WARMUPS,
@@ -391,7 +391,7 @@ describe("example-derived benchmark", () => {
           },
         );
         rows.push({
-          name: "ecs example host tick send",
+          name: "ecs example server tick send",
           entities: totalEntities,
           mode: mode.label,
           rows: totalEntities,
@@ -407,7 +407,7 @@ describe("example-derived benchmark", () => {
         const clientApply = await sample(
           () => {
             runClientTickApply(clientApplyPair.client);
-            return clientApplyPair.hostTransport.sent;
+            return clientApplyPair.serverTransport.sent;
           },
           DEFAULT_SAMPLES,
           1,
@@ -415,7 +415,7 @@ describe("example-derived benchmark", () => {
           {
             beforeEach: () => {
               clientApplyPair = createEcsBenchPair(extraEntities, mode);
-              clientApplyPair.hostTransport.resetCounters();
+              clientApplyPair.serverTransport.resetCounters();
               clientApplyPair.host.tick();
             },
           },
@@ -435,16 +435,16 @@ describe("example-derived benchmark", () => {
 
         let networkedPair = createEcsBenchPair(extraEntities, mode);
         const networked = await sample(() => {
-          networkedPair.hostTransport.resetCounters();
+          networkedPair.serverTransport.resetCounters();
           const renderedRows = runNetworkedFrame(networkedPair.host, networkedPair.client);
-          return { renderedRows, bytes: networkedPair.hostTransport.sent };
+          return { renderedRows, bytes: networkedPair.serverTransport.sent };
         }, DEFAULT_SAMPLES, 1, DEFAULT_WARMUPS, {
           beforeEach: () => {
             networkedPair = createEcsBenchPair(extraEntities, mode);
           },
         });
         rows.push({
-          name: "ecs example host tick sync client render",
+          name: "ecs example server tick sync client render",
           entities: totalEntities,
           mode: mode.label,
           rows: networked.value.renderedRows,

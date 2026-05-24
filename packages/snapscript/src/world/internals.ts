@@ -5,7 +5,7 @@ import type {
   ClientWorld,
   ComponentInstance,
   EntityRef,
-  HostWorld,
+  ServerWorld,
 } from "./world";
 import type { ComponentRecord } from "./records";
 
@@ -29,16 +29,16 @@ export interface WorldInternals {
   applyDestroyFromRemote(entityId: number, schemaId?: number): void;
 }
 
-const internalsByWorld = new WeakMap<HostWorld | ClientWorld, WorldInternals>();
+const internalsByWorld = new WeakMap<ServerWorld | ClientWorld, WorldInternals>();
 
 export function registerWorldInternals(
-  world: HostWorld | ClientWorld,
+  world: ServerWorld | ClientWorld,
   internals: WorldInternals,
 ): void {
   internalsByWorld.set(world, internals);
 }
 
-export function worldInternals(world: HostWorld | ClientWorld): WorldInternals {
+export function worldInternals(world: ServerWorld | ClientWorld): WorldInternals {
   const internals = internalsByWorld.get(world);
   if (internals === undefined) {
     throw new Error("Unknown SnapScript world instance");

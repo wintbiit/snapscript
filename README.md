@@ -2,7 +2,7 @@
 
 SnapScript is a platform-agnostic TypeScript framework for networked ECS state.
 
-It gives a host process one authoritative world and gives clients replicated read-only worlds. Rendering, physics, input, assets, matchmaking, persistence, and real transport reliability stay in your engine or platform layer.
+It gives a server process one authoritative world and gives clients replicated read-only worlds. Rendering, physics, input, assets, matchmaking, persistence, and real transport reliability stay in your engine or platform layer.
 
 ## Install
 
@@ -25,7 +25,7 @@ Define replicated state with field helpers and component/entity schemas:
 ```ts
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -34,7 +34,7 @@ import {
   u16,
   type ClientTransport,
   type Clock,
-  type HostTransport,
+  type ServerTransport,
 } from "snapscript";
 
 const Position = defineComponent("Position", {
@@ -63,16 +63,16 @@ const protocol = defineProtocol({
 });
 ```
 
-Create one world at the host and one world per client connection or client runtime:
+Create one world on the server and one world per client connection or client runtime:
 
 ```ts
-declare const hostTransport: HostTransport;
+declare const serverTransport: ServerTransport;
 declare const clientTransport: ClientTransport;
 declare const clock: Clock;
 
-const hostWorld = createHostWorld({
+const serverWorld = createServerWorld({
   protocol,
-  transport: hostTransport,
+  transport: serverTransport,
   clock,
 });
 
@@ -86,13 +86,13 @@ const clientWorld = createClientWorld({
 Run gameplay logic against the world:
 
 ```ts
-const player = hostWorld.spawn(Player, {
+const player = serverWorld.spawn(Player, {
   position: { x: 0, y: 0 },
   health: { hp: 100 },
 });
 
-hostWorld.on(Move, (ctx) => {
-  const position = hostWorld.get(player, Position);
+serverWorld.on(Move, (ctx) => {
+  const position = serverWorld.get(player, Position);
   if (position === undefined) {
     return;
   }
@@ -100,7 +100,7 @@ hostWorld.on(Move, (ctx) => {
   position.y.value += ctx.payload.dy;
 });
 
-hostWorld.system("movement", "update", (world) => {
+serverWorld.system("movement", "update", (world) => {
   world.each([Position] as const, (_entity, position) => {
     position.x.value += 0.01;
   });
@@ -108,7 +108,7 @@ hostWorld.system("movement", "update", (world) => {
 
 clientWorld.send(Move, { dx: 1, dy: 0 });
 
-hostWorld.tick();
+serverWorld.tick();
 clientWorld.tick();
 ```
 
@@ -135,13 +135,13 @@ pnpm example:simple:dev
 pnpm example:ecs:dev
 ```
 
-Open `/host` and `/client` in separate browser tabs. The examples show the intended layering:
+Open `/server` and `/client` in separate browser tabs. The examples show the intended layering:
 
 - `examples/protocol` shows `.snap` check/generate, stable lock ids, generated protocol exports, and typed RPC helpers
-- host/client worlds are created directly by the host app
+- server/client worlds are created directly by the server app
 - transports only deliver `Uint8Array` packets and channel labels
 - commands express client intent
-- host command handlers mutate authoritative `NetRef.value`
+- server command handlers mutate authoritative `NetRef.value`
 - clients observe read-only replicated component state
 
 The examples are also performance fixtures. Changes to query loops, dirty encoding, fanout, or
@@ -159,7 +159,7 @@ SnapScript owns:
 - snapshot encode/apply
 - command/event packet encoding
 - world-local peer ids and entity ownership metadata
-- host/client world runtime
+- server/client world runtime
 - optional visibility filtering
 - `.snap` protocol generation tooling
 - benchmark and protocol diagnostics
@@ -176,18 +176,18 @@ SnapScript does not own:
 - reliable network protocol implementation
 - transform interpolation, prediction, rollback, or lag compensation policy
 
-There is no top-level `Game` or `App` object. The public runtime entrypoints are `createHostWorld()` and `createClientWorld()`. There is no public local-only `createWorld()` because this project is a networking framework.
+There is no top-level `Game` or `App` object. The public runtime entrypoints are `createServerWorld()` and `createClientWorld()`. There is no public local-only `createWorld()` because this project is a networking framework.
 
 ## World Roles
 
 The world role is fixed at construction time:
 
-- `createHostWorld()` returns a `HostWorld`
+- `createServerWorld()` returns a `ServerWorld`
 - `createClientWorld()` returns a `ClientWorld`
 
-The role is not a later mode switch. Internally, host and client worlds use separate classes over a shared core so hot paths do not branch on role for every operation.
+The role is not a later mode switch. Internally, server and client worlds use separate classes over a shared core so hot paths do not branch on role for every operation.
 
-`HostWorld` can:
+`ServerWorld` can:
 
 - `spawn`, `add`, `remove`, and `destroy` replicated entities/components
 - mutate component fields through `NetRef.value`
@@ -210,7 +210,7 @@ The role is not a later mode switch. Internally, host and client worlds use sepa
 - request a full snapshot
 - observe applied snapshots through `onSnapshot()`
 
-World handles are frozen runtime objects. Keep non-replicated host application state in your own objects.
+World handles are frozen runtime objects. Keep non-replicated server application state in your own objects.
 
 ## ECS API
 
@@ -239,12 +239,12 @@ import type { ComponentQuery } from "snapscript";
 
 const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
 
-hostWorld.each(MovementQuery, (_entity, position, velocity) => {
+serverWorld.each(MovementQuery, (_entity, position, velocity) => {
   position.x.value += velocity.x.value;
 });
 ```
 
-For shared render or inspection code, accept `ReplicatedStateReader` instead of `HostWorld` or
+For shared render or inspection code, accept `ReplicatedStateReader` instead of `ServerWorld` or
 `ClientWorld`. That keeps helper functions read-only and usable on both sides:
 
 ```ts
@@ -295,7 +295,7 @@ snapscript generate examples/protocol/example.snap
 
 ## RPC
 
-Commands travel client to host:
+Commands travel client to server:
 
 ```ts
 const Jump = defineCommand("Jump", {
@@ -303,52 +303,52 @@ const Jump = defineCommand("Jump", {
 });
 
 clientWorld.send(Jump, { strength: 0.75 });
-hostWorld.on(Jump, (ctx) => {
+serverWorld.on(Jump, (ctx) => {
   console.log(ctx.payload.strength, ctx.sender);
 });
 ```
 
-Events travel host to client:
+Events travel server to client:
 
 ```ts
 const TookDamage = defineEvent("TookDamage", {
   amount: u16(0),
 });
 
-hostWorld.broadcast(TookDamage, { amount: 10 });
+serverWorld.broadcast(TookDamage, { amount: 10 });
 clientWorld.on(TookDamage, (ctx) => {
   playDamageFx(ctx.payload.amount);
 });
 ```
 
-RPC handlers receive one frozen context object. `ctx.payload` is the decoded payload, `ctx.sender` is the SnapScript peer id, `ctx.tick` is the sender tick, and `ctx.channel` is the logical channel used by the packet. Host command handlers receive the client peer id; client event handlers receive `ServerPeerId` (`0`).
+RPC handlers receive one frozen context object. `ctx.payload` is the decoded payload, `ctx.sender` is the SnapScript peer id, `ctx.tick` is the sender tick, and `ctx.channel` is the logical channel used by the packet. Server command handlers receive the client peer id; client event handlers receive `ServerPeerId` (`0`).
 
-Hosts can broadcast an event to every connected client or route it to one peer:
+Servers can broadcast an event to every connected client or route it to one peer:
 
 ```ts
-hostWorld.broadcast(TookDamage, { amount: 10 });
-hostWorld.sendTo(peerId, TookDamage, { amount: 10 });
+serverWorld.broadcast(TookDamage, { amount: 10 });
+serverWorld.sendTo(peerId, TookDamage, { amount: 10 });
 ```
 
 Handler errors are isolated and logged through `logger.error`. Handlers run from a stable dispatch snapshot, so handlers registered during one dispatch start on a later packet.
 
 ## Peer Ids And Ownership
 
-`PeerId` is a world-local connection id. `ServerPeerId` is always `0`; client peer ids start at `1` and are assigned by the host during the hello/full-snapshot handshake.
+`PeerId` is a world-local connection id. `ServerPeerId` is always `0`; client peer ids start at `1` and are assigned by the server during the hello/full-snapshot handshake.
 
 Ownership is internal network metadata, not a component that users add, remove, or query:
 
 ```ts
-hostWorld.setOwner(player, peerId);
-hostWorld.isOwner(peerId, player);
-hostWorld.ownedBy(peerId);
+serverWorld.setOwner(player, peerId);
+serverWorld.isOwner(peerId, player);
+serverWorld.ownedBy(peerId);
 
 clientWorld.myPeerId();
 clientWorld.isMine(player.id);
 clientWorld.ownerOf(player.id);
 ```
 
-Entities default to owner `0`. `clearOwner(entity)` sets ownership back to the server. Ownership is synchronized in snapshots and dirty structural updates, so client-side `isMine(entity)` follows host authority.
+Entities default to owner `0`. `clearOwner(entity)` sets ownership back to the server. Ownership is synchronized in snapshots and dirty structural updates, so client-side `isMine(entity)` follows server authority.
 
 ## Transport Boundary
 
@@ -362,7 +362,7 @@ interface ClientTransport {
   onPacket(cb: (channel: ChannelName, bytes: Uint8Array) => void): void;
 }
 
-interface HostTransport {
+interface ServerTransport {
   send(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void;
   broadcast(channel: ChannelName, bytes: Uint8Array): void;
   onPacket(cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void;
@@ -376,14 +376,14 @@ SnapScript uses channels as policy:
 - update-only dirty snapshots use `unreliable`
 - commands/events use the channel declared on the RPC definition
 
-There is no generic public `Transport` type and no world-level default channel option. If you need WebSocket, WebRTC, UDP, Steam networking, or an engine networking layer, implement the adapter at the host layer.
+There is no generic public `Transport` type and no world-level default channel option. If you need WebSocket, WebRTC, UDP, Steam networking, or an engine networking layer, implement the adapter on the server layer.
 
 Inbound packet bytes are copied when they enter the world queue, so adapters may reuse their receive buffers after invoking `onPacket`. Outbound bytes should be treated as immutable.
 
-Hosts can opt into batched dirty update snapshots:
+Servers can opt into batched dirty update snapshots:
 
 ```ts
-const hostWorld = createHostWorld({
+const serverWorld = createServerWorld({
   protocol,
   transport,
   clock,
@@ -391,7 +391,7 @@ const hostWorld = createHostWorld({
 });
 ```
 
-The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates. When enabled, the host still sends batched update packets only to peers that advertise batched snapshot support in SnapScript control messages; older peers automatically receive the default update format.
+The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates. When enabled, the server still sends batched update packets only to peers that advertise batched snapshot support in SnapScript control messages; older peers automatically receive the default update format.
 
 Keep this option data-driven. It can reduce bandwidth for homogeneous dirty frames, but the default
 path stays the CPU-stable baseline until the example-derived benchmark proves a broad win.
@@ -401,7 +401,7 @@ path stays the CPU-stable baseline until the example-derived benchmark proves a 
 Default visibility is all-visible:
 
 ```ts
-const hostWorld = createHostWorld({
+const serverWorld = createServerWorld({
   protocol,
   transport,
   clock,
@@ -412,7 +412,7 @@ const hostWorld = createHostWorld({
 Deny by default with `visibility: "none"`:
 
 ```ts
-const hostWorld = createHostWorld({
+const serverWorld = createServerWorld({
   protocol,
   transport,
   clock,
@@ -420,10 +420,10 @@ const hostWorld = createHostWorld({
 });
 ```
 
-Use an interest hook for host-defined policy:
+Use an interest hook for server-defined policy:
 
 ```ts
-const hostWorld = createHostWorld({
+const serverWorld = createServerWorld({
   protocol,
   transport,
   clock,
@@ -435,7 +435,7 @@ const hostWorld = createHostWorld({
 
 Interest hooks receive a SnapScript `PeerId`, read-only entity/world inputs, and must return a boolean. Manual overrides are available with `setVisible(peerId, entity, visible)` and `clearVisible(peerId, entity?)`.
 
-Visibility applies to full snapshots and incremental sync. When visibility is peer-specific, the host encodes peer-specific snapshots and reconciles stale peer state with removals/destroys.
+Visibility applies to full snapshots and incremental sync. When visibility is peer-specific, the server encodes peer-specific snapshots and reconciles stale peer state with removals/destroys.
 
 ## Prediction, Interpolation, And Rollback
 
@@ -449,7 +449,7 @@ Framework responsibilities:
 - post-apply snapshot hooks
 - future state capture/restore and reconciliation hooks
 
-Host responsibilities:
+Server responsibilities:
 
 - input sampling
 - character controller prediction
@@ -474,7 +474,7 @@ The benchmark reports median/min/max wall-clock time across repeated samples. Th
 - component add/remove churn
 - fanout across peers
 - map storage vs sparse-set vs sparse-set plus archetype index
-- real example-derived host send, movement, render read, and client apply loops
+- real example-derived server send, movement, render read, and client apply loops
 
 Use this rule for architecture work: example-derived benchmark results are the merge gate. Synthetic
 microbenchmarks are useful for finding mechanisms, but they are not enough to justify a storage or
@@ -516,7 +516,7 @@ The current default storage is sparse-set component storage with an archetype qu
 - two-component queries use smallest sparse table lookup
 - wider queries choose between archetype buckets and smallest sparse table
 
-Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Hosts may opt into batched dirty snapshots with `snapshotEncoding: "batched"`; the runtime only sends batched packets to peers that advertised support and falls back per peer otherwise.
+Snapshot writing uses pooled bit writers. Default all-visible dirty fanout can encode one update packet and reuse it across peers. Per-peer visibility paths reuse encoded packets when peer op sets are identical. Servers may opt into batched dirty snapshots with `snapshotEncoding: "batched"`; the runtime only sends batched packets to peers that advertised support and falls back per peer otherwise.
 
 The package root intentionally does not export binary readers/writers, raw registry factories, packet codecs, low-level sync runtimes, storage classes, or public `World` constructors.
 
@@ -533,7 +533,7 @@ pnpm test:examples
 After `pnpm build`, audit the generated public declaration surface if you touch exports:
 
 ```sh
-rg -n "createWorld|declare class World|BinaryReader|BinaryWriter|ComponentStorage|SparseSetComponentStorage|createSyncHost|createSyncClient" packages/snapscript/dist/index.d.mts
+rg -n "createWorld|declare class World|BinaryReader|BinaryWriter|ComponentStorage|SparseSetComponentStorage|createSyncServer|createSyncClient" packages/snapscript/dist/index.d.mts
 ```
 
 The command should not find those internal names.

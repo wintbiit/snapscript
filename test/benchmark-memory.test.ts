@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   defineComponent,
   defineProtocol,
-  createHostWorld,
+  createServerWorld,
   qf32,
   type ChannelName,
   type Clock,
-  type HostTransport,
-  type HostWorld,
+  type ServerTransport,
+  type ServerWorld,
   type PeerRef,
   u16,
 } from "../packages/snapscript/src/index";
@@ -88,7 +88,7 @@ const memProtocol = defineProtocol({ components: { Position, Velocity, Health } 
 const storageVariants: Array<readonly [string, () => BenchmarkStorage | undefined]> = [];
 storageVariants.push(["default storage", () => undefined]);
 
-class MemoryHostTransport implements HostTransport {
+class MemoryServerTransport implements ServerTransport {
   send(_peer: PeerRef, _channel: ChannelName, _bytes: Uint8Array): void {}
   broadcast(_channel: ChannelName, _bytes: Uint8Array): void {}
   onPacket(_cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void {}
@@ -108,11 +108,11 @@ function clock(): Clock {
   };
 }
 
-function buildWorld(entityCount: number, _storage: BenchmarkStorage | undefined): HostWorld {
-  const world = createHostWorld(
+function buildWorld(entityCount: number, _storage: BenchmarkStorage | undefined): ServerWorld {
+  const world = createServerWorld(
     {
       protocol: memProtocol,
-      transport: new MemoryHostTransport(),
+      transport: new MemoryServerTransport(),
       clock: clock(),
     },
   );
@@ -127,7 +127,7 @@ function buildWorld(entityCount: number, _storage: BenchmarkStorage | undefined)
   return world;
 }
 
-function mutateForDirty(world: HostWorld): void {
+function mutateForDirty(world: ServerWorld): void {
   world.each([Position, Velocity], (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
     pos.y.value += vel.y.value;

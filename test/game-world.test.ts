@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -14,11 +14,11 @@ import {
   type ChannelName,
   type ClientTransport,
   type Clock,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
 } from "../packages/snapscript/src/index";
 
-class ManualTransport implements ClientTransport, HostTransport {
+class ManualTransport implements ClientTransport, ServerTransport {
   peer?: ManualTransport;
   mutateAfterReceive = false;
   readonly peerId: PeerRef = {};
@@ -86,23 +86,23 @@ function clock(): Clock {
 describe("single world sync api", () => {
   it("fails fast with friendly world construction errors", () => {
     const protocol = defineProtocol({});
-    const hostTransport = new ManualTransport();
+    const serverTransport = new ManualTransport();
     const clientTransport = new ManualTransport();
     const validClock = clock();
 
-    expect(() => createHostWorld(new Date() as never)).toThrow(/requires an options object/);
+    expect(() => createServerWorld(new Date() as never)).toThrow(/requires an options object/);
     expect(() => createClientWorld([] as never)).toThrow(/requires an options object/);
     expect(() =>
-      createHostWorld(new (class HostWorldOptions {})() as never),
+      createServerWorld(new (class ServerWorldOptions {})() as never),
     ).toThrow(/plain object map/);
     expect(() =>
-      createHostWorld({ transport: hostTransport, clock: validClock } as never),
-    ).toThrow(/createHostWorld\(\) requires a protocol from defineProtocol\(\)/);
+      createServerWorld({ transport: serverTransport, clock: validClock } as never),
+    ).toThrow(/createServerWorld\(\) requires a protocol from defineProtocol\(\)/);
     expect(() =>
       createClientWorld({ transport: clientTransport, clock: validClock } as never),
     ).toThrow(/createClientWorld\(\) requires a protocol from defineProtocol\(\)/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol: {
           components: {},
           prefabs: {},
@@ -114,30 +114,30 @@ describe("single world sync api", () => {
           },
           manifest: () => ({ components: [], prefabs: [], commands: [], events: [] }),
         },
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
       } as never),
-    ).toThrow(/createHostWorld\(\) requires a protocol from defineProtocol\(\)/);
+    ).toThrow(/createServerWorld\(\) requires a protocol from defineProtocol\(\)/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol: { ...protocol },
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
       } as never),
-    ).toThrow(/createHostWorld\(\) requires a protocol from defineProtocol\(\)/);
+    ).toThrow(/createServerWorld\(\) requires a protocol from defineProtocol\(\)/);
     expect(() =>
-      createHostWorld({ protocol, transport: {}, clock: validClock } as never),
-    ).toThrow(/host transport with send\(\), broadcast\(\), and onPacket\(\)/);
+      createServerWorld({ protocol, transport: {}, clock: validClock } as never),
+    ).toThrow(/server transport with send\(\), broadcast\(\), and onPacket\(\)/);
     expect(() =>
       createClientWorld({ protocol, transport: {}, clock: validClock } as never),
     ).toThrow(/client transport with send\(\) and onPacket\(\)/);
-    expect(() => createHostWorld({ protocol, transport: hostTransport } as never)).toThrow(
-      /createHostWorld\(\) requires a clock with nowMs\(\) and tick\(\)/,
+    expect(() => createServerWorld({ protocol, transport: serverTransport } as never)).toThrow(
+      /createServerWorld\(\) requires a clock with nowMs\(\) and tick\(\)/,
     );
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         channel: "unreliable",
       } as never),
@@ -151,9 +151,9 @@ describe("single world sync api", () => {
       } as never),
     ).toThrow(/does not accept channel/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         visiblity: "none",
       } as never),
@@ -167,33 +167,33 @@ describe("single world sync api", () => {
       } as never),
     ).toThrow(/unknown option "interest"/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         visibility: "nearby",
       } as never),
     ).toThrow(/visibility must be "all" or "none"/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         snapshotEncoding: "always-batch",
       } as never),
     ).toThrow(/snapshotEncoding must be "default" or "batched"/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         interest: true,
       } as never),
     ).toThrow(/interest must be a function/);
     expect(() =>
-      createHostWorld({
+      createServerWorld({
         protocol,
-        transport: hostTransport,
+        transport: serverTransport,
         clock: validClock,
         logger: true,
       } as never),
@@ -208,10 +208,10 @@ describe("single world sync api", () => {
     ).toThrow(/logger\.error must be a function/);
   });
 
-  it("returns frozen host and client world handles", () => {
+  it("returns frozen server and client world handles", () => {
     const protocol = defineProtocol({});
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
 
     expect(Object.isFrozen(host)).toBe(true);
@@ -226,16 +226,16 @@ describe("single world sync api", () => {
 
   it("fails fast when transports deliver invalid packet boundaries", () => {
     const protocol = defineProtocol({});
-    const [hostTransport, clientTransport] = pair();
-    createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     createClientWorld({ protocol, transport: clientTransport, clock: clock() });
 
     expect(() =>
-      hostTransport.receive("peer", "ordered" as never, new Uint8Array()),
-    ).toThrow(/HostTransport\.onPacket\(\) channel must be "reliable" or "unreliable"/);
+      serverTransport.receive("peer", "ordered" as never, new Uint8Array()),
+    ).toThrow(/ServerTransport\.onPacket\(\) channel must be "reliable" or "unreliable"/);
     expect(() =>
-      hostTransport.receive(null as never, "reliable", new Uint8Array()),
-    ).toThrow(/HostTransport\.onPacket\(\) requires a peer ref/);
+      serverTransport.receive(null as never, "reliable", new Uint8Array()),
+    ).toThrow(/ServerTransport\.onPacket\(\) requires a peer ref/);
     expect(() =>
       clientTransport.receive("peer", "reliable", [] as never),
     ).toThrow(/ClientTransport\.onPacket\(\) bytes must be a Uint8Array/);
@@ -247,10 +247,10 @@ describe("single world sync api", () => {
     });
     const PlayerState = Player.component;
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport, clientTransport] = pair();
-    hostTransport.mutateAfterReceive = true;
+    const [serverTransport, clientTransport] = pair();
+    serverTransport.mutateAfterReceive = true;
     clientTransport.mutateAfterReceive = true;
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const player = host.spawn(Player, { hp: 77 });
 
@@ -261,27 +261,27 @@ describe("single world sync api", () => {
     expect(client.get(player.id, PlayerState)?.hp.value).toBe(77);
   });
 
-  it("fails fast when host transport peers are invalid", () => {
+  it("fails fast when server transport peers are invalid", () => {
     const protocol = defineProtocol({});
-    const transport: HostTransport = {
+    const transport: ServerTransport = {
       send() {},
       broadcast() {},
       onPacket() {},
       peers: () => [Number.NaN as never],
     };
-    const host = createHostWorld({ protocol, transport, clock: clock() });
+    const host = createServerWorld({ protocol, transport, clock: clock() });
 
-    expect(() => host.tick()).toThrow(/HostTransport\.peers\(\) requires a peer ref/);
+    expect(() => host.tick()).toThrow(/ServerTransport\.peers\(\) requires a peer ref/);
   });
 
   it("fails fast when clock functions return invalid values", () => {
     const protocol = defineProtocol({});
-    const [hostTransport, clientTransport] = pair();
+    const [serverTransport, clientTransport] = pair();
     let hostNowMs = 10;
     let clientNowMs = 20;
-    const invalidTickHost = createHostWorld({
+    const invalidTickServer = createServerWorld({
       protocol,
-      transport: hostTransport,
+      transport: serverTransport,
       clock: {
         nowMs: () => 0,
         tick: () => 1.5,
@@ -295,9 +295,9 @@ describe("single world sync api", () => {
         tick: () => 1,
       },
     });
-    const backwardsHost = createHostWorld({
+    const backwardsServer = createServerWorld({
       protocol,
-      transport: hostTransport,
+      transport: serverTransport,
       clock: {
         nowMs: () => hostNowMs,
         tick: () => 1,
@@ -312,15 +312,15 @@ describe("single world sync api", () => {
       },
     });
 
-    expect(() => invalidTickHost.tick()).toThrow(
-      /createHostWorld\(\) clock\.tick\(\) must return an integer/,
+    expect(() => invalidTickServer.tick()).toThrow(
+      /createServerWorld\(\) clock\.tick\(\) must return an integer/,
     );
     expect(() => invalidNowClient.tick()).toThrow(
       /createClientWorld\(\) clock\.nowMs\(\) must return a finite number/,
     );
-    backwardsHost.tick();
+    backwardsServer.tick();
     hostNowMs = 9;
-    expect(() => backwardsHost.tick()).toThrow(/createHostWorld\(\) clock\.nowMs\(\) must be monotonic/);
+    expect(() => backwardsServer.tick()).toThrow(/createServerWorld\(\) clock\.nowMs\(\) must be monotonic/);
     backwardsClient.tick();
     clientNowMs = 19;
     expect(() => backwardsClient.tick()).toThrow(
@@ -339,8 +339,8 @@ describe("single world sync api", () => {
       position: Position,
     });
     const protocol = defineProtocol({ components: { Position } });
-    const [hostTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const entity = host.spawn();
 
     expect(() => host.add(entity, Outside)).toThrow(/not registered in this world protocol/);
@@ -358,8 +358,8 @@ describe("single world sync api", () => {
       hp: u16(100),
     });
     const protocol = defineProtocol({ components: { Position } });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const entity = host.spawn();
 
@@ -400,8 +400,8 @@ describe("single world sync api", () => {
       components: { Position },
       prefabs: { MissingEntityPrefab },
     });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const entity = host.spawn();
 
@@ -443,8 +443,8 @@ describe("single world sync api", () => {
       hp: u16(100),
     });
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const first = host.spawn(Player);
     const second = host.spawn(Player);
 
@@ -468,11 +468,11 @@ describe("single world sync api", () => {
       hp: u16(100),
     });
     const protocol = defineProtocol({ components: { Visible } });
-    const [hostTransport] = pair();
+    const [serverTransport] = pair();
     let inspected = false;
-    const host = createHostWorld({
+    const host = createServerWorld({
       protocol,
-      transport: hostTransport,
+      transport: serverTransport,
       clock: clock(),
       interest(peerId, entity, world) {
         inspected = true;
@@ -508,17 +508,17 @@ describe("single world sync api", () => {
 
   it("fails fast when interest hooks return non-boolean visibility", () => {
     const protocol = defineProtocol({});
-    const [hostTransport] = pair();
-    const host = createHostWorld({
+    const [serverTransport] = pair();
+    const host = createServerWorld({
       protocol,
-      transport: hostTransport,
+      transport: serverTransport,
       clock: clock(),
       interest: () => "yes" as never,
     });
     const entity = host.spawn();
 
     expect(() => host.isVisible(1, entity)).toThrow(
-      /createHostWorld\(\) interest must return a boolean/,
+      /createServerWorld\(\) interest must return a boolean/,
     );
   });
 
@@ -536,8 +536,8 @@ describe("single world sync api", () => {
       amount: u16(0),
     });
     const protocol = defineProtocol({ commands: { Ping }, events: { Flash } });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
 
     expect(() => host.on(Move, () => {})).toThrow(/not registered in this world protocol/);
@@ -574,8 +574,8 @@ describe("single world sync api", () => {
       commands: { Move },
       events: { Flash },
     });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     host.spawn(Player);
     const seen: string[] = [];
@@ -653,8 +653,8 @@ describe("single world sync api", () => {
       commands: { Move },
       events: { DamageFx },
     });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const player = host.spawn(Player);
     let eventAmount = 0;
@@ -686,8 +686,8 @@ describe("single world sync api", () => {
     });
     const PlayerState = Player.component;
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const player = host.spawn(Player);
     const seen: { tick: number; channel: ChannelName; hp: number | undefined }[] = [];
@@ -727,8 +727,8 @@ describe("single world sync api", () => {
       hp: u16(100),
     });
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     host.spawn(Player);
     client.tick();
@@ -761,9 +761,9 @@ describe("single world sync api", () => {
       hp: u16(100),
     });
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport, clientTransport] = pair();
+    const [serverTransport, clientTransport] = pair();
     const errors: string[] = [];
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({
       protocol,
       transport: clientTransport,
@@ -796,8 +796,8 @@ describe("single world sync api", () => {
     });
     const PlayerState = Player.component;
     const protocol = defineProtocol({ prefabs: { Player } });
-    const [hostTransport, clientTransport] = pair();
-    const host = createHostWorld({ protocol, transport: hostTransport, clock: clock() });
+    const [serverTransport, clientTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const hostPlayer = host.spawn(Player);
     const hostState = host.get(hostPlayer, PlayerState)!;

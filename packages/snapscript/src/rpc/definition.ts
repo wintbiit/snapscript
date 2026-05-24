@@ -19,7 +19,7 @@ import type {
   RpcOptions,
 } from "./types";
 
-/** Defines a client-to-host RPC command. Commands are sent with `clientWorld.send()` and handled by `hostWorld.on()`. */
+/** Defines a client-to-server RPC command. Commands are sent with `clientWorld.send()` and handled by `serverWorld.on()`. */
 export function defineCommand<TFields extends FieldDefinitions>(
   name: string,
   fields: TFields,
@@ -28,7 +28,7 @@ export function defineCommand<TFields extends FieldDefinitions>(
   return defineRpc("command", name, fields, options) as CommandDefinition<TFields>;
 }
 
-/** Defines a host-to-client RPC event. Events are sent with `hostWorld.broadcast()` and handled by `clientWorld.on()`. */
+/** Defines a server-to-client RPC event. Events are sent with `serverWorld.broadcast()` and handled by `clientWorld.on()`. */
 export function defineEvent<TFields extends FieldDefinitions>(
   name: string,
   fields: TFields,

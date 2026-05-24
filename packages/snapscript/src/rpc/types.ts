@@ -8,7 +8,7 @@ import type {
   SchemaField,
 } from "../schema/index";
 
-/** RPC direction: commands travel client-to-host, events travel host-to-client. */
+/** RPC direction: commands travel client-to-server, events travel server-to-client. */
 export type RpcKind = "command" | "event";
 
 /** Fully defaulted payload shape for an RPC definition. */
@@ -37,11 +37,11 @@ export interface InternalRpcDefinition<TFields extends FieldDefinitions = FieldD
   readonly codec: RpcCodec<TFields>;
 }
 
-/** Client-to-host RPC definition. */
+/** Client-to-server RPC definition. */
 export type CommandDefinition<TFields extends FieldDefinitions = FieldDefinitions> =
   RpcDefinition<TFields> & { readonly kind: "command" };
 
-/** Host-to-client RPC definition. */
+/** Server-to-client RPC definition. */
 export type EventDefinition<TFields extends FieldDefinitions = FieldDefinitions> =
   RpcDefinition<TFields> & { readonly kind: "event" };
 

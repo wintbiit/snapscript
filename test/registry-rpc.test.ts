@@ -11,7 +11,7 @@ import {
 import { createRegistry } from "../packages/snapscript/src/registry/index";
 import { decodeRpc, encodeRpc } from "../packages/snapscript/src/rpc/index";
 import { applySnapshot, encodeFullSnapshot } from "../packages/snapscript/src/sync/index";
-import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
 
 describe("registry and rpc packets", () => {
   it("registers schemas and rpcs by id", () => {
@@ -43,7 +43,7 @@ describe("registry and rpc packets", () => {
     });
     const registry = createRegistry().registerComponent(Player.component);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player, { hp: 25 });
 

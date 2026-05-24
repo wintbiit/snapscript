@@ -1,13 +1,13 @@
 /** Logical packet channel requested by SnapScript. The transport adapter owns the actual delivery semantics. */
 export type ChannelName = "reliable" | "unreliable";
 
-/** Stable peer handle chosen by the host transport. Object refs are allowed when the adapter owns identity. */
+/** Stable peer handle chosen by the server transport. Object refs are allowed when the adapter owns identity. */
 export type PeerRef = string | number | symbol | object;
 
-/** SnapScript connection id assigned by a HostWorld. `0` is always the host/server. */
+/** SnapScript connection id assigned by a ServerWorld. `0` is always the server. */
 export type PeerId = number;
 
-/** Reserved peer id for the authoritative host/server. */
+/** Reserved peer id for the authoritative server. */
 export const ServerPeerId: PeerId = 0;
 
 /** Client-side transport adapter passed to `createClientWorld()`. */
@@ -16,8 +16,8 @@ export interface ClientTransport {
   onPacket(cb: (channel: ChannelName, bytes: Uint8Array) => void): void;
 }
 
-/** Host-side transport adapter passed to `createHostWorld()`. */
-export interface HostTransport {
+/** Server-side transport adapter passed to `createServerWorld()`. */
+export interface ServerTransport {
   send(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void;
   broadcast(channel: ChannelName, bytes: Uint8Array): void;
   onPacket(cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void;

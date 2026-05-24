@@ -1,6 +1,6 @@
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -11,8 +11,8 @@ import {
   type ClientTransport,
   type ComponentOrPrefab,
   type ComponentQuery,
-  type HostWorld,
-  type HostTransport,
+  type ServerWorld,
+  type ServerTransport,
   type PrefabInstanceOf,
   type ProtocolManifestEntry,
   type ReadonlyPrefabInstanceOf,
@@ -24,14 +24,20 @@ import {
 import type { World } from "../packages/snapscript/src/index";
 // @ts-expect-error SnapScript does not expose a local-only world factory.
 import { createWorld } from "../packages/snapscript/src/index";
-import { HostWorld as HostWorldValue } from "../packages/snapscript/src/index";
-// @ts-expect-error low-level sync runtime is internal; use createHostWorld/createClientWorld.
-import { createSyncHost } from "../packages/snapscript/src/index";
+// @ts-expect-error legacy host API was renamed to createServerWorld().
+import { createHostWorld } from "../packages/snapscript/src/index";
+// @ts-expect-error legacy host type was renamed to ServerWorld.
+import type { HostWorld } from "../packages/snapscript/src/index";
+// @ts-expect-error legacy host transport type was renamed to ServerTransport.
+import type { HostTransport } from "../packages/snapscript/src/index";
+import { ServerWorld as ServerWorldValue } from "../packages/snapscript/src/index";
+// @ts-expect-error low-level sync runtime is internal; use createServerWorld/createClientWorld.
+import { createSyncServer } from "../packages/snapscript/src/index";
 // @ts-expect-error snapshot codec helpers are internal to the world runtime.
 import { encodeDirty } from "../packages/snapscript/src/index";
 // @ts-expect-error rpc packet helpers are internal to the world runtime.
 import { encodeRpc } from "../packages/snapscript/src/index";
-// @ts-expect-error engine bridge abstractions are host-owned, not framework API.
+// @ts-expect-error engine bridge abstractions are server-owned, not framework API.
 import type { EngineBridge } from "../packages/snapscript/src/index";
 // @ts-expect-error field codecs are internal; use built-in field helpers.
 import type { FieldCodec } from "../packages/snapscript/src/index";
@@ -47,7 +53,7 @@ import type { ProtocolRegistry } from "../packages/snapscript/src/index";
 import { BitReader } from "../packages/snapscript/src/index";
 // @ts-expect-error global schema lookup is internal; use protocol/world APIs.
 import { getSchemaById } from "../packages/snapscript/src/index";
-// @ts-expect-error use explicit ClientTransport or HostTransport instead.
+// @ts-expect-error use explicit ClientTransport or ServerTransport instead.
 import type { Transport } from "../packages/snapscript/src/index";
 // @ts-expect-error component storage is an internal implementation detail.
 import type { ComponentStorage } from "../packages/snapscript/src/index";
@@ -63,7 +69,7 @@ const transport: ClientTransport = {
   send() {},
   onPacket() {},
 };
-const hostTransport: HostTransport = {
+const serverTransport: ServerTransport = {
   send() {},
   broadcast() {},
   onPacket() {},
@@ -96,10 +102,10 @@ const componentOrPrefab: ComponentOrPrefab = Actor;
 const componentQuery = [Position, Velocity] as const satisfies ComponentQuery;
 componentOrPrefab.name.toString();
 componentQuery[0].name.toString();
-const host = createHostWorld({ protocol, transport: hostTransport, clock });
+const host = createServerWorld({ protocol, transport: serverTransport, clock });
 const client = createClientWorld({ protocol, transport, clock });
-const typedHost: HostWorld = host;
-typedHost.tick();
+const typedServer: ServerWorld = host;
+typedServer.tick();
 const hostReader: ReplicatedStateReader = host;
 const clientReader: ReplicatedStateReader = client;
 hostReader.each(componentQuery, (_entity, position, velocity) => {
@@ -113,10 +119,10 @@ clientReader.query(Position).forEach(([_entity, position]) => {
 });
 if (false) {
   // @ts-expect-error worlds require a protocol instead of a raw registry fallback
-  createHostWorld({ transport: hostTransport, clock });
+  createServerWorld({ transport: serverTransport, clock });
   // @ts-expect-error component fields must come from SnapScript field helpers
   defineComponent("FakeField", { hp: { defaultValue: 1 } });
-  createHostWorld({
+  createServerWorld({
     protocol: {
       components: {},
       prefabs: {},
@@ -129,12 +135,12 @@ if (false) {
       },
       manifest: () => ({ components: [], prefabs: [], commands: [], events: [] }),
     },
-    transport: hostTransport,
+    transport: serverTransport,
     clock,
   });
-  createHostWorld({
+  createServerWorld({
     protocol,
-    transport: hostTransport,
+    transport: serverTransport,
     clock,
     interest(_peerId, entity, world) {
       entity.id.toFixed();
@@ -142,7 +148,7 @@ if (false) {
       world.get(entity, Position)!.x.value.toFixed();
       // @ts-expect-error interest hook entity refs are read-only policy inputs
       entity.add(Position);
-      // @ts-expect-error read-only policy refs are not host-authored EntityRef values
+      // @ts-expect-error read-only policy refs are not server-authored EntityRef values
       host.add(entity, Position);
       // @ts-expect-error interest world is a read-only policy view
       world.spawn(Position);
@@ -153,18 +159,18 @@ if (false) {
       return true;
     },
   });
-  createHostWorld({
+  createServerWorld({
     protocol,
-    transport: hostTransport,
+    transport: serverTransport,
     clock,
     // @ts-expect-error world-level channels are fixed; set channel on commands/events instead
     channel: "unreliable",
   });
-  createHostWorld({
+  createServerWorld({
     protocol,
-    transport: hostTransport,
+    transport: serverTransport,
     clock,
-    // @ts-expect-error host world options fail fast for unknown keys
+    // @ts-expect-error server world options fail fast for unknown keys
     visiblity: "none",
   });
   createClientWorld({
@@ -178,11 +184,11 @@ if (false) {
     protocol,
     transport,
     clock,
-    // @ts-expect-error client worlds do not accept host visibility hooks
+    // @ts-expect-error client worlds do not accept server visibility hooks
     interest: () => true,
   });
-  // @ts-expect-error HostWorld is a type-only public surface; use createHostWorld().
-  new HostWorldValue({ protocol, transport: hostTransport, clock });
+  // @ts-expect-error ServerWorld is a type-only public surface; use createServerWorld().
+  new ServerWorldValue({ protocol, transport: serverTransport, clock });
   // @ts-expect-error field codec is internal
   u16(0).codec;
   // @ts-expect-error schema codec is internal
@@ -319,7 +325,7 @@ if (false) {
   host.dirty;
   // @ts-expect-error spawn() is the public empty-entity creation API
   host.entity();
-  // @ts-expect-error entity refs are ids; mutate through HostWorld methods
+  // @ts-expect-error entity refs are ids; mutate through ServerWorld methods
   emptyActor.add(Position);
   // @ts-expect-error systems are driven through tick(), not an exposed phase runner
   host.runSystems("update");
@@ -333,7 +339,7 @@ if (false) {
   client._spawnRemote(Position, 1);
   // @ts-expect-error client query rows expose read-only entity refs
   client.query(Position).toArray()[0]![0].destroy();
-  // @ts-expect-error client query entity refs are not host-authored EntityRef values
+  // @ts-expect-error client query entity refs are not server-authored EntityRef values
   host.add(client.query(Position).toArray()[0]![0], Position);
   client.query(Position).forEach(([entity]) => {
     client.get(entity, Position);
@@ -373,5 +379,5 @@ if (false) {
 }
 
 describe("public api type checks", () => {
-  it("compiles directional host/client rpc usage", () => {});
+  it("compiles directional server/client rpc usage", () => {});
 });

@@ -17,7 +17,7 @@ interface ProtocolRegistry {
   getRpc(rpcId: number): RpcDefinition | undefined;
 }
 
-/** Frozen protocol bundle used to construct host and client worlds. */
+/** Frozen protocol bundle used to construct server and client worlds. */
 export interface ProtocolDefinition<
   TCommands extends CommandMap = CommandMap,
   TEvents extends EventMap = EventMap,

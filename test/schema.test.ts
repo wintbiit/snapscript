@@ -14,7 +14,7 @@ import {
   vec3q,
   type ComponentSchema,
 } from "../packages/snapscript/src/index";
-import { createTestHostWorld, testProtocol } from "./helpers";
+import { createTestServerWorld, testProtocol } from "./helpers";
 
 describe("schema", () => {
   it("assigns field ids in declaration order", () => {
@@ -250,7 +250,7 @@ describe("schema", () => {
       dead: bool(false),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 

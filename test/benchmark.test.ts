@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  createHostWorld,
+  createServerWorld,
   defineComponent,
   defineProtocol,
   qf32,
@@ -8,7 +8,7 @@ import {
   type ChannelName,
   type Clock,
   type ComponentSchema,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
@@ -19,7 +19,7 @@ import {
   SparseSetComponentStorage,
   type ComponentStorage,
 } from "../packages/snapscript/src/world/storage";
-import { createTestClientWorld, createTestHostWorld } from "./helpers";
+import { createTestClientWorld, createTestServerWorld } from "./helpers";
 
 const Position = defineComponent("BenchPosition", {
   x: qf32({ min: -100_000, max: 100_000, precision: 0.01, default: 0 }),
@@ -59,7 +59,7 @@ interface BenchRow {
 const DEFAULT_SAMPLES = 9;
 const DEFAULT_WARMUPS = 2;
 
-class BenchHostTransport implements HostTransport {
+class BenchServerTransport implements ServerTransport {
   readonly sent: { peer: PeerRef; channel: ChannelName; bytes: Uint8Array }[] = [];
   #handler?: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void;
 
@@ -104,7 +104,7 @@ const benchProtocol = defineProtocol({
 });
 
 function buildWorld(entityCount: number) {
-  const world = createTestHostWorld(benchProtocol);
+  const world = createTestServerWorld(benchProtocol);
   for (let i = 0; i < entityCount; i += 1) {
     const entity = world.spawn();
     world.add(entity, Position, { x: i, y: -i });
@@ -115,7 +115,7 @@ function buildWorld(entityCount: number) {
 }
 
 function buildMixedWorld(entityCount: number, velocityEvery: number) {
-  const world = createTestHostWorld(benchProtocol);
+  const world = createTestServerWorld(benchProtocol);
   for (let i = 0; i < entityCount; i += 1) {
     const entity = world.spawn();
     world.add(entity, Position, { x: i, y: -i });
@@ -202,7 +202,7 @@ function sample<T>(
   };
 }
 
-function moveAll(world: ReturnType<typeof createTestHostWorld>): number {
+function moveAll(world: ReturnType<typeof createTestServerWorld>): number {
   let rows = 0;
   world.each([Position, Velocity] as const, (_entity, pos, vel) => {
     pos.x.value += vel.x.value;
@@ -212,7 +212,7 @@ function moveAll(world: ReturnType<typeof createTestHostWorld>): number {
   return rows;
 }
 
-function touchTriple(world: ReturnType<typeof createTestHostWorld>): number {
+function touchTriple(world: ReturnType<typeof createTestServerWorld>): number {
   let rows = 0;
   world.each([Position, Velocity, Health] as const, (_entity, pos, vel, health) => {
     pos.x.value += vel.x.value;
@@ -221,7 +221,7 @@ function touchTriple(world: ReturnType<typeof createTestHostWorld>): number {
   return rows;
 }
 
-function countQuery(world: ReturnType<typeof createTestHostWorld>, mode: "single" | "pair" | "triple"): number {
+function countQuery(world: ReturnType<typeof createTestServerWorld>, mode: "single" | "pair" | "triple"): number {
   let rows = 0;
   const query =
     mode === "single"
@@ -236,7 +236,7 @@ function countQuery(world: ReturnType<typeof createTestHostWorld>, mode: "single
 }
 
 function queryLength(
-  world: ReturnType<typeof createTestHostWorld>,
+  world: ReturnType<typeof createTestServerWorld>,
   mode: "single" | "pair" | "triple",
 ): number {
   return mode === "single"
@@ -535,10 +535,10 @@ describe("benchmark baselines", () => {
     });
 
     for (const peerCount of [1, 8, 32]) {
-      const transport = new BenchHostTransport(
+      const transport = new BenchServerTransport(
         Array.from({ length: peerCount }, (_, index) => `peer-${index}`),
       );
-      const host = createHostWorld({
+      const host = createServerWorld({
         protocol,
         transport,
         clock: clock(),
@@ -560,7 +560,7 @@ describe("benchmark baselines", () => {
         };
       });
       rows.push({
-        name: "host dirty fanout",
+        name: "server dirty fanout",
         entities: 1_000,
         peers: peerCount,
         rows: fanout.value.packets,

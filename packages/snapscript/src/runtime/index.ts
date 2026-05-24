@@ -1,4 +1,4 @@
-import { ServerPeerId, type ClientTransport, type Clock, type HostTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
+import { ServerPeerId, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
 import { decodeRpc, encodeRpc } from "../rpc/index";
 import type { RpcCtx, RpcDefinition, RpcHandler } from "../rpc/index";
@@ -17,13 +17,13 @@ import {
   peekMessageType,
 } from "../sync/index";
 import type { SnapshotWriteOps } from "../sync/index";
-import type { ClientWorld, HostWorld, SnapshotContext } from "../world/index";
+import type { ClientWorld, ServerWorld, SnapshotContext } from "../world/index";
 import type { DirtyOps } from "../world/dirty-graph";
 import { worldInternals } from "../world/internals";
 
-export interface SyncHostOptions {
-  readonly world: HostWorld;
-  readonly transport: HostTransport;
+export interface SyncServerOptions {
+  readonly world: ServerWorld;
+  readonly transport: ServerTransport;
   readonly clock: Clock;
   readonly registry: RegistryLike;
   readonly logger?: Logger;
@@ -45,7 +45,7 @@ export interface SyncClientOptions {
 
 export type SyncRuntimeOptions = SyncClientOptions;
 
-export interface SyncHost {
+export interface SyncServer {
   start(): void;
   update(): void;
   sendFullSnapshot(peer?: PeerRef): void;
@@ -167,7 +167,7 @@ class HandlerTable {
   }
 }
 
-export function createSyncHost(options: SyncHostOptions): SyncHost {
+export function createSyncServer(options: SyncServerOptions): SyncServer {
   const handlers = new HandlerTable();
   const peers = new Set<PeerRef>();
   const peerIds = new PeerIds();
@@ -211,7 +211,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
         return;
       }
     } catch (error) {
-      logError(options.logger, "Failed to handle host packet", error);
+      logError(options.logger, "Failed to handle server packet", error);
     }
   });
 
@@ -291,7 +291,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
     sendTo(peerId, rpc, payload) {
       const peer = peerIds.refFor(peerId);
       if (peer === undefined) {
-        throw new Error(`HostWorld.sendTo() unknown peer ${peerId}`);
+        throw new Error(`ServerWorld.sendTo() unknown peer ${peerId}`);
       }
       options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
     },
@@ -305,7 +305,7 @@ export function createSyncHost(options: SyncHostOptions): SyncHost {
 }
 
 function trySendSharedUpdate(
-  options: SyncHostOptions,
+  options: SyncServerOptions,
   peerStates: Map<PeerRef, PeerState>,
   peers: readonly PeerRef[],
   dirty: DirtyOps,
@@ -347,7 +347,7 @@ function trySendSharedUpdate(
 }
 
 function encodeUpdateSnapshotOps(
-  options: SyncHostOptions,
+  options: SyncServerOptions,
   state: PeerState,
   tick: number,
   ops: SnapshotWriteOps,
@@ -357,7 +357,7 @@ function encodeUpdateSnapshotOps(
     : encodeSnapshotOps(options.world, tick, ops);
 }
 
-function updateEncodingKey(options: SyncHostOptions, state: PeerState): string {
+function updateEncodingKey(options: SyncServerOptions, state: PeerState): string {
   return options.snapshotEncoding === "batched" && supportsBatchedSnapshots(state) ? "ub" : "u";
 }
 
@@ -496,7 +496,7 @@ function logError(logger: Logger | undefined, message: string, error: unknown): 
   });
 }
 
-function currentPeers(transport: HostTransport, seen: Set<PeerRef>): readonly PeerRef[] {
+function currentPeers(transport: ServerTransport, seen: Set<PeerRef>): readonly PeerRef[] {
   return [...new Set([...(transport.peers?.() ?? []), ...seen])];
 }
 
@@ -526,15 +526,15 @@ function componentOpFromKey(key: string): { entityId: number; componentId: numbe
 function isVisible(
   peerId: PeerId,
   entityId: number,
-  visibility: SyncHostOptions["isVisible"],
+  visibility: SyncServerOptions["isVisible"],
 ): boolean {
   return visibility?.(peerId, entityId) ?? true;
 }
 
 function buildFullOpsForPeer(
-  world: HostWorld,
+  world: ServerWorld,
   peerId: PeerId,
-  visibility: SyncHostOptions["isVisible"],
+  visibility: SyncServerOptions["isVisible"],
   state?: PeerState,
 ): SnapshotWriteOps {
   // Full snapshots also reconcile stale peer state, so disappearing visibility becomes removals/destroys.
@@ -583,11 +583,11 @@ function replaceKnownState(
 }
 
 function buildStructuralOpsForPeer(
-  world: HostWorld,
+  world: ServerWorld,
   dirty: DirtyOps,
   peerId: PeerId,
   state: PeerState,
-  visibility: SyncHostOptions["isVisible"],
+  visibility: SyncServerOptions["isVisible"],
 ): SnapshotWriteOps {
   const internals = worldInternals(world);
   const created = new Set<number>();
@@ -653,7 +653,7 @@ function buildUpdateOpsForPeer(
   dirty: DirtyOps,
   peerId: PeerId,
   state: PeerState,
-  visibility: SyncHostOptions["isVisible"],
+  visibility: SyncServerOptions["isVisible"],
 ): SnapshotWriteOps {
   return {
     updated: dirty.updated.filter(

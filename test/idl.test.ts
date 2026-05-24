@@ -23,7 +23,7 @@ describe("snap idl", () => {
     expect(protocol).toContain("hidden: bool(false)");
     expect(protocol).toContain('defineCommand("Movement.Move"');
     expect(protocol).toContain('defineEvent("Movement.MoveDisabled"');
-    expect(protocol).toContain("sendTo(world: HostWorld, peerId: PeerId");
+    expect(protocol).toContain("sendTo(world: ServerWorld, peerId: PeerId");
     expect(manifest.components.Position!.fields).toEqual({ x: 0, y: 1, hidden: 2 });
     expect(manifest.commands["Movement.Move"]!.fields).toEqual({ dx: 0, dy: 1 });
     expect(manifest.events["Movement.MoveDisabled"]!.fields).toEqual({ disabled: 0 });

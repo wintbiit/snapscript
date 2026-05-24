@@ -1,6 +1,6 @@
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineProtocol,
   type CommandDefinition,
   type ChannelName,
@@ -8,13 +8,13 @@ import {
   type ClientTransport,
   type ComponentSchema,
   type EventDefinition,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
   type PrefabDefinition,
   type ProtocolDefinition,
 } from "../packages/snapscript/src/index";
 
-class NullHostTransport implements HostTransport {
+class NullServerTransport implements ServerTransport {
   send(_peer: PeerRef, _channel: ChannelName, _bytes: Uint8Array): void {}
   broadcast(_channel: ChannelName, _bytes: Uint8Array): void {}
   onPacket(_cb: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void): void {}
@@ -66,10 +66,10 @@ export function testProtocol(...items: readonly ProtocolItem[]): ProtocolDefinit
   return defineProtocol({ components, prefabs, commands, events });
 }
 
-export function createTestHostWorld(protocol: ProtocolDefinition = defineProtocol({})) {
-  return createHostWorld({
+export function createTestServerWorld(protocol: ProtocolDefinition = defineProtocol({})) {
+  return createServerWorld({
     protocol,
-    transport: new NullHostTransport(),
+    transport: new NullServerTransport(),
     clock: testClock(),
   });
 }

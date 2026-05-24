@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { ClientDemo, HostDemo, protocol as snapProtocol, type DemoSnapshot } from "./ecs-demo";
+import { ClientDemo, ServerDemo, protocol as snapProtocol, type DemoSnapshot } from "./ecs-demo";
 
-type Mode = "home" | "host" | "client";
+type Mode = "home" | "server" | "client";
 
 const mode = computed<Mode>(() => {
-  if (window.location.pathname === "/host") {
-    return "host";
+  if (window.location.pathname === "/server") {
+    return "server";
   }
   if (window.location.pathname === "/client") {
     return "client";
@@ -14,7 +14,7 @@ const mode = computed<Mode>(() => {
   return "home";
 });
 
-const host = mode.value === "host" ? new HostDemo() : undefined;
+const server = mode.value === "server" ? new ServerDemo() : undefined;
 const client = mode.value === "client" ? new ClientDemo() : undefined;
 
 const emptySnapshot: DemoSnapshot = {
@@ -29,7 +29,7 @@ const emptySnapshot: DemoSnapshot = {
   benchmark: "--",
 };
 
-const state = ref<DemoSnapshot>(host?.snapshot() ?? client?.snapshot() ?? emptySnapshot);
+const state = ref<DemoSnapshot>(server?.snapshot() ?? client?.snapshot() ?? emptySnapshot);
 const manifest = snapProtocol.manifest();
 
 const wsUrl = computed(() => {
@@ -40,9 +40,9 @@ const wsUrl = computed(() => {
 let frame = 0;
 
 function refresh() {
-  host?.tick();
+  server?.tick();
   client?.tick();
-  state.value = host?.snapshot() ?? client?.snapshot() ?? state.value;
+  state.value = server?.snapshot() ?? client?.snapshot() ?? state.value;
 }
 
 function animate() {
@@ -51,14 +51,14 @@ function animate() {
 }
 
 onMounted(() => {
-  host?.connect(wsUrl.value);
+  server?.connect(wsUrl.value);
   client?.connect(wsUrl.value);
   frame = window.requestAnimationFrame(animate);
 });
 
 onUnmounted(() => {
   window.cancelAnimationFrame(frame);
-  host?.dispose();
+  server?.dispose();
   client?.dispose();
 });
 
@@ -72,16 +72,16 @@ function n(value: number, digits = 2): string {
     <header class="topbar">
       <div>
         <h1>SnapScript ECS</h1>
-        <p v-if="mode === 'home'">Open host and client pages. The example uses component storage, queries, systems, RPC, named channels, and binary snapshots.</p>
-        <p v-else-if="mode === 'host'">Authoritative ECS world. Systems update components, commands mutate NetRefs, dirty snapshots sync state.</p>
-        <p v-else>Client ECS world. Controls send commands; local state only changes from host snapshots and events.</p>
+        <p v-if="mode === 'home'">Open server and client pages. The example uses component storage, queries, systems, RPC, named channels, and binary snapshots.</p>
+        <p v-else-if="mode === 'server'">Authoritative ECS world. Systems update components, commands mutate NetRefs, dirty snapshots sync state.</p>
+        <p v-else>Client ECS world. Controls send commands; local state only changes from server snapshots and events.</p>
       </div>
       <code>{{ wsUrl }}</code>
     </header>
 
     <section v-if="mode === 'home'" class="home">
-      <a href="/host" target="_blank" rel="noreferrer">
-        <strong>Host</strong>
+      <a href="/server" target="_blank" rel="noreferrer">
+        <strong>Server</strong>
         <span>Runs systems and authoritative state.</span>
       </a>
       <a href="/client" target="_blank" rel="noreferrer">
@@ -94,7 +94,7 @@ function n(value: number, digits = 2): string {
       <article class="panel">
         <div class="panel-head">
           <div>
-            <h2>{{ mode === "host" ? "Host Session" : "Client Session" }}</h2>
+            <h2>{{ mode === "server" ? "Server Session" : "Client Session" }}</h2>
             <p>{{ state.entities.length }} query rows</p>
           </div>
           <span :class="['status', state.connected ? 'online' : 'offline']">
@@ -123,7 +123,7 @@ function n(value: number, digits = 2): string {
           <button @click="client?.runBenchmark()">Benchmark</button>
         </div>
         <div class="actions" v-else>
-          <button @click="host?.runBenchmark()">Benchmark</button>
+          <button @click="server?.runBenchmark()">Benchmark</button>
         </div>
       </article>
 

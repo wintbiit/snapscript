@@ -33,7 +33,7 @@ export type {
 } from "./schema/index";
 export {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
 } from "./world/index";
 export type {
   ClientWorld,
@@ -46,8 +46,8 @@ export type {
   EachFn,
   EntityInstance,
   EntityRef,
-  HostWorld,
-  HostWorldOptions,
+  ServerWorld,
+  ServerWorldOptions,
   InterestWorld,
   NetRef,
   PrefabComponentsOf,
@@ -90,7 +90,7 @@ export type {
   ChannelName,
   ClientTransport,
   Clock,
-  HostTransport,
+  ServerTransport,
   Logger,
   PeerId,
   PeerRef,

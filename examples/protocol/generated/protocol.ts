@@ -1,5 +1,5 @@
 import { bool, defineCommand, defineComponent, defineEntity, defineEvent, defineProtocol, qf32, u16 } from "snapscript";
-import type { ClientWorld, CommandDefinition, EventDefinition, FieldDefinitions, FieldValues, HostWorld, PeerId, RpcHandler } from "snapscript";
+import type { ClientWorld, CommandDefinition, EventDefinition, FieldDefinitions, FieldValues, ServerWorld, PeerId, RpcHandler } from "snapscript";
 
 type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : never;
 type RpcPayload<T> = FieldValues<RpcFields<T> & FieldDefinitions>;
@@ -27,13 +27,13 @@ export const rpc = {
   commands: {
     MovementMove: {
       send(world: ClientWorld, payload?: Partial<RpcPayload<typeof MovementMove>>) { world.send(MovementMove, payload); },
-      on(world: HostWorld, handler: RpcHandler<RpcFields<typeof MovementMove> & FieldDefinitions>) { return world.on(MovementMove, handler); },
+      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof MovementMove> & FieldDefinitions>) { return world.on(MovementMove, handler); },
     },
   },
   events: {
     MovementMoveDisabled: {
-      broadcast(world: HostWorld, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.broadcast(MovementMoveDisabled, payload); },
-      sendTo(world: HostWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.sendTo(peerId, MovementMoveDisabled, payload); },
+      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.broadcast(MovementMoveDisabled, payload); },
+      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.sendTo(peerId, MovementMoveDisabled, payload); },
       on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof MovementMoveDisabled> & FieldDefinitions>) { return world.on(MovementMoveDisabled, handler); },
     },
   },

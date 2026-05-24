@@ -3,7 +3,7 @@ import type {
   ChannelName,
   ClientTransport,
   Clock,
-  HostTransport,
+  ServerTransport,
   Logger,
   PeerRef,
 } from "../platform/index";
@@ -16,10 +16,10 @@ import type {
 } from "../rpc/index";
 import {
   createSyncClient,
-  createSyncHost,
+  createSyncServer,
   type SyncClient,
-  type SyncHost,
-  type SyncHostOptions,
+  type SyncServer,
+  type SyncServerOptions,
   type SyncRuntimeOptions,
 } from "../runtime/index";
 import { fieldsForSchema } from "../schema/index";
@@ -44,7 +44,7 @@ import {
   type ComponentQueryRow,
 } from "./storage";
 
-/** Mutable component instance returned from host-world reads. Write replicated fields through `NetRef.value`. */
+/** Mutable component instance returned from server-world reads. Write replicated fields through `NetRef.value`. */
 export type ComponentInstance<TFields extends FieldDefinitions> = {
   readonly entityId: number;
   readonly id: number;
@@ -113,9 +113,9 @@ export interface ReadonlyEntityRef {
 
 declare const entityRefBrand: unique symbol;
 
-/** Host-authored entity identity returned by `HostWorld.spawn()`. */
+/** Server-authored entity identity returned by `ServerWorld.spawn()`. */
 export interface EntityRef extends ReadonlyEntityRef {
-  readonly [entityRefBrand]: "host";
+  readonly [entityRefBrand]: "server";
 }
 
 /** Ordered system phase run by `world.tick()`. */
@@ -137,8 +137,8 @@ export interface SnapshotContext {
   readonly channel: ChannelName;
 }
 
-/** System callback registered on a host or client world. */
-export type SystemFn<TWorld extends HostWorld | ClientWorld = HostWorld | ClientWorld> = (
+/** System callback registered on a server or client world. */
+export type SystemFn<TWorld extends ServerWorld | ClientWorld = ServerWorld | ClientWorld> = (
   world: TWorld,
   context: SystemContext,
 ) => void;
@@ -322,16 +322,16 @@ class QueryResultImpl<
 }
 
 /**
- * Options for constructing an authoritative host world.
+ * Options for constructing an authoritative server world.
  *
- * A host world owns simulation truth, mutable replicated state, command handlers, and outbound
- * snapshots. There is no local-only world mode; choose host or client when the world is created.
+ * A server world owns simulation truth, mutable replicated state, command handlers, and outbound
+ * snapshots. There is no local-only world mode; choose server or client when the world is created.
  */
-export interface HostWorldOptions {
+export interface ServerWorldOptions {
   /** Protocol returned by `defineProtocol()`. Hand-written protocol-like objects are rejected. */
   readonly protocol: ProtocolDefinition;
-  /** Host transport adapter. Reliability and ordering are provided by the host/engine layer. */
-  readonly transport: HostTransport;
+  /** Server transport adapter. Reliability and ordering are provided by the server/engine layer. */
+  readonly transport: ServerTransport;
   /** Monotonic frame clock used for system context and runtime tick ordering. */
   readonly clock: Clock;
   /** Optional structured logger used for isolated handler/runtime errors. */
@@ -343,10 +343,10 @@ export interface HostWorldOptions {
    * can reduce bytes for homogeneous dirty updates without changing the public ECS API.
    */
   readonly snapshotEncoding?: "default" | "batched";
-  /** Default host visibility policy before manual overrides or `interest` are applied. */
+  /** Default server visibility policy before manual overrides or `interest` are applied. */
   readonly visibility?: "all" | "none";
   /**
-   * Optional host-owned interest hook.
+   * Optional server-owned interest hook.
    *
    * The hook receives a SnapScript peer id and read-only world inputs, and must return a boolean. Use `visibility: "all"`
    * when every entity should be visible to every peer.
@@ -358,10 +358,10 @@ export interface HostWorldOptions {
  * Options for constructing a replicated client world.
  *
  * Client worlds are read-only views of replicated state. They run client systems, send commands,
- * receive events, and apply snapshots produced by a host world.
+ * receive events, and apply snapshots produced by a server world.
  */
 export interface ClientWorldOptions {
-  /** Protocol returned by `defineProtocol()`; it must match the host protocol. */
+  /** Protocol returned by `defineProtocol()`; it must match the server protocol. */
   readonly protocol: ProtocolDefinition;
   /** Client transport adapter. Snapshot and RPC bytes are delivered as raw `Uint8Array` packets. */
   readonly transport: ClientTransport;
@@ -375,7 +375,7 @@ export interface ClientWorldOptions {
  * Shared read-only replicated state view.
  *
  * Use this type for renderers, inspectors, interpolation samplers, and helper functions that should
- * work with either a host world or a client world without gaining mutation authority.
+ * work with either a server world or a client world without gaining mutation authority.
  */
 export interface ReplicatedStateReader {
   /** Reads a single component or a simple prefab primary component as read-only replicated state. */
@@ -406,7 +406,7 @@ export interface ReplicatedStateReader {
   ): void;
 }
 
-/** Read-only world view passed to host interest hooks. */
+/** Read-only world view passed to server interest hooks. */
 export interface InterestWorld extends ReplicatedStateReader {}
 
 function createWorldInternals(core: WorldCore): WorldInternals {
@@ -887,7 +887,7 @@ class WorldCore implements QueryWorldAccess {
     );
   }
 
-  system<TWorld extends HostWorld | ClientWorld>(
+  system<TWorld extends ServerWorld | ClientWorld>(
     name: string,
     phase: SystemPhase,
     fn: SystemFn<TWorld>,
@@ -909,7 +909,7 @@ class WorldCore implements QueryWorldAccess {
     };
   }
 
-  runSystems(owner: HostWorld | ClientWorld, phase: SystemPhase, context?: SystemContext): void {
+  runSystems(owner: ServerWorld | ClientWorld, phase: SystemPhase, context?: SystemContext): void {
     const sourceContext = context ?? { phase, tick: 0, dtMs: 0, nowMs: 0 };
     const systemContext = Object.isFrozen(sourceContext) ? sourceContext : Object.freeze(sourceContext);
     // Systems use a registration snapshot so systems added mid-phase start on the next tick.
@@ -918,7 +918,7 @@ class WorldCore implements QueryWorldAccess {
     }
   }
 
-  tick(owner: HostWorld | ClientWorld): void {
+  tick(owner: ServerWorld | ClientWorld): void {
     this.runSystems(owner, "preUpdate");
     this.runSystems(owner, "update");
     this.runSystems(owner, "postUpdate");
@@ -1393,7 +1393,7 @@ class ReadonlyNetRefImpl<T> implements ReadonlyNetRef<T> {
 
   set value(_value: T) {
     throw new Error(
-      `Cannot mutate read-only replicated field "${this.meta.schemaName}.${this.meta.fieldName}". Send a command to the host or mutate state from a HostWorld.`,
+      `Cannot mutate read-only replicated field "${this.meta.schemaName}.${this.meta.fieldName}". Send a command to the server or mutate state from a ServerWorld.`,
     );
   }
 
@@ -1432,29 +1432,29 @@ class QueuedClientTransport implements ClientTransport {
   }
 }
 
-class QueuedHostTransport implements HostTransport {
+class QueuedServerTransport implements ServerTransport {
   readonly #queue: { peer: PeerRef; channel: ChannelName; bytes: Uint8Array }[] = [];
   #handler?: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void;
 
-  constructor(private readonly inner: HostTransport) {
+  constructor(private readonly inner: ServerTransport) {
     inner.onPacket((peer, channel, bytes) => {
-      assertPeerRef(peer, "HostTransport.onPacket()");
-      assertChannelName(channel, "HostTransport.onPacket()");
-      assertPacketBytes(bytes, "HostTransport.onPacket()");
+      assertPeerRef(peer, "ServerTransport.onPacket()");
+      assertChannelName(channel, "ServerTransport.onPacket()");
+      assertPacketBytes(bytes, "ServerTransport.onPacket()");
       this.#queue.push({ peer, channel, bytes: copyPacketBytes(bytes) });
     });
   }
 
   send(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void {
-    assertPeerRef(peer, "HostTransport.send()");
-    assertChannelName(channel, "HostTransport.send()");
-    assertPacketBytes(bytes, "HostTransport.send()");
+    assertPeerRef(peer, "ServerTransport.send()");
+    assertChannelName(channel, "ServerTransport.send()");
+    assertPacketBytes(bytes, "ServerTransport.send()");
     this.inner.send(peer, channel, bytes);
   }
 
   broadcast(channel: ChannelName, bytes: Uint8Array): void {
-    assertChannelName(channel, "HostTransport.broadcast()");
-    assertPacketBytes(bytes, "HostTransport.broadcast()");
+    assertChannelName(channel, "ServerTransport.broadcast()");
+    assertPacketBytes(bytes, "ServerTransport.broadcast()");
     this.inner.broadcast(channel, bytes);
   }
 
@@ -1468,10 +1468,10 @@ class QueuedHostTransport implements HostTransport {
       return [];
     }
     if (peers === null || typeof peers !== "object" || !(Symbol.iterator in peers)) {
-      throw new Error("HostTransport.peers() must return an iterable of peer refs");
+      throw new Error("ServerTransport.peers() must return an iterable of peer refs");
     }
     return Array.from(peers, (peer) => {
-      assertPeerRef(peer, "HostTransport.peers()");
+      assertPeerRef(peer, "ServerTransport.peers()");
       return peer;
     });
   }
@@ -1484,9 +1484,9 @@ class QueuedHostTransport implements HostTransport {
   }
 }
 
-/** Authoritative world handle. Hosts create entities, mutate components, receive commands, and send snapshots. */
-export interface HostWorld {
-  /** Creates an empty host-authored entity. */
+/** Authoritative world handle. Servers create entities, mutate components, receive commands, and send snapshots. */
+export interface ServerWorld {
+  /** Creates an empty server-authored entity. */
   spawn(): EntityRef;
   /** Creates an entity with one component schema attached and returns that component instance. */
   spawn<TFields extends FieldDefinitions>(
@@ -1505,7 +1505,7 @@ export interface HostWorld {
         : never;
     }>,
   ): EntityRef;
-  /** Adds a component or prefab to an existing host entity. Re-adding an existing component returns it. */
+  /** Adds a component or prefab to an existing server entity. Re-adding an existing component returns it. */
   add<TFields extends FieldDefinitions>(
     entity: number | EntityRef,
     component: ComponentSchema<TFields>,
@@ -1542,7 +1542,7 @@ export interface HostWorld {
   ): boolean;
   /** Returns the owner peer id for an entity. Server-owned entities return `0`. */
   ownerOf(entity: number | ReadonlyEntityRef): PeerId;
-  /** Sets host-authoritative owner metadata for an entity. */
+  /** Sets server-authoritative owner metadata for an entity. */
   setOwner(entity: number | EntityRef, peerId: PeerId): void;
   /** Sets an entity back to server ownership. */
   clearOwner(entity: number | EntityRef): void;
@@ -1564,20 +1564,20 @@ export interface HostWorld {
     fn: EachFn<TComponents>,
   ): void;
   /** Registers a named system in a phase. The returned function unregisters it. */
-  system(name: string, phase: SystemPhase, fn: SystemFn<HostWorld>): () => void;
-  /** Advances transport input, systems, and host snapshot output once. */
+  system(name: string, phase: SystemPhase, fn: SystemFn<ServerWorld>): () => void;
+  /** Advances transport input, systems, and server snapshot output once. */
   tick(): void;
-  /** Handles a client-to-host command. */
+  /** Handles a client-to-server command. */
   on<TFields extends FieldDefinitions>(
     rpc: CommandDefinition<TFields>,
     handler: RpcHandler<TFields>,
   ): () => void;
-  /** Broadcasts a host-to-client event. */
+  /** Broadcasts a server-to-client event. */
   broadcast<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
-  /** Sends a host-to-client event to one peer id. */
+  /** Sends a server-to-client event to one peer id. */
   sendTo<TFields extends FieldDefinitions>(
     peerId: PeerId,
     rpc: EventDefinition<TFields>,
@@ -1593,10 +1593,10 @@ export interface HostWorld {
   isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean;
 }
 
-class HostWorldImpl implements HostWorld {
+class ServerWorldImpl implements ServerWorld {
   readonly #core: WorldCore;
-  readonly #transport: QueuedHostTransport;
-  readonly #runtime: SyncHost;
+  readonly #transport: QueuedServerTransport;
+  readonly #runtime: SyncServer;
   readonly #clock: Clock;
   readonly #protocol: ProtocolDefinition;
   readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
@@ -1608,21 +1608,21 @@ class HostWorldImpl implements HostWorld {
   #lastNowMs: number | undefined;
   #systemTick = 0;
 
-  constructor(options: HostWorldOptions) {
-    assertHostWorldOptions(options);
-    const clock = checkedClock("createHostWorld()", options.clock);
+  constructor(options: ServerWorldOptions) {
+    assertServerWorldOptions(options);
+    const clock = checkedClock("createServerWorld()", options.clock);
     this.#core = new WorldCore(options.protocol);
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
     this.#clock = clock;
-    this.#transport = new QueuedHostTransport(options.transport);
+    this.#transport = new QueuedServerTransport(options.transport);
     this.#visibilityDefault = options.visibility ?? "all";
     this.#interestWorld = this.#createInterestWorld();
     if (options.interest !== undefined) {
       this.#interest = options.interest;
     }
-    this.#runtime = createSyncHost(
-      hostRuntimeOptions(this, this.#transport, options, clock, () => this.#canReusePeerSnapshots()),
+    this.#runtime = createSyncServer(
+      serverRuntimeOptions(this, this.#transport, options, clock, () => this.#canReusePeerSnapshots()),
     );
     Object.freeze(this);
   }
@@ -1754,7 +1754,7 @@ class HostWorldImpl implements HostWorld {
     this.#core.each(components, fn);
   }
 
-  system(name: string, phase: SystemPhase, fn: SystemFn<HostWorld>): () => void {
+  system(name: string, phase: SystemPhase, fn: SystemFn<ServerWorld>): () => void {
     return this.#core.system(name, phase, fn);
   }
 
@@ -1776,7 +1776,7 @@ class HostWorldImpl implements HostWorld {
     rpc: CommandDefinition<TFields>,
     handler: RpcHandler<TFields>,
   ): () => void {
-    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "HostWorld.on");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ServerWorld.on");
     return this.#runtime.on(rpc, handler);
   }
 
@@ -1784,7 +1784,7 @@ class HostWorldImpl implements HostWorld {
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
-    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "HostWorld.broadcast");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.broadcast");
     this.#runtime.broadcast(rpc, payload);
   }
 
@@ -1793,23 +1793,23 @@ class HostWorldImpl implements HostWorld {
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
-    assertPeerId(peerId, "HostWorld.sendTo()");
-    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "HostWorld.sendTo");
+    assertPeerId(peerId, "ServerWorld.sendTo()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.sendTo");
     this.#runtime.sendTo(peerId, rpc, payload);
   }
 
   sendFullSnapshot(peer?: PeerRef): void {
     if (peer !== undefined) {
-      assertPeerRef(peer, "HostWorld.sendFullSnapshot()");
+      assertPeerRef(peer, "ServerWorld.sendFullSnapshot()");
     }
     this.#runtime.sendFullSnapshot(peer);
   }
 
   setVisible(peerId: PeerId, entity: number | ReadonlyEntityRef, visible: boolean): void {
-    assertPeerId(peerId, "HostWorld.setVisible()");
-    const entityId = entityIdFrom(entity, "HostWorld.setVisible()");
+    assertPeerId(peerId, "ServerWorld.setVisible()");
+    const entityId = entityIdFrom(entity, "ServerWorld.setVisible()");
     if (typeof visible !== "boolean") {
-      throw new Error("HostWorld.setVisible() visible must be a boolean");
+      throw new Error("ServerWorld.setVisible() visible must be a boolean");
     }
     const map = this.#visibility.get(peerId) ?? new Map<number, boolean>();
     map.set(entityId, visible);
@@ -1817,13 +1817,13 @@ class HostWorldImpl implements HostWorld {
   }
 
   clearVisible(peerId: PeerId, entity?: number | ReadonlyEntityRef): void {
-    assertPeerId(peerId, "HostWorld.clearVisible()");
+    assertPeerId(peerId, "ServerWorld.clearVisible()");
     if (entity === undefined) {
       this.#visibility.delete(peerId);
       return;
     }
 
-    const entityId = entityIdFrom(entity, "HostWorld.clearVisible()");
+    const entityId = entityIdFrom(entity, "ServerWorld.clearVisible()");
     const map = this.#visibility.get(peerId);
     if (map === undefined) {
       return;
@@ -1835,8 +1835,8 @@ class HostWorldImpl implements HostWorld {
   }
 
   isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
-    assertPeerId(peerId, "HostWorld.isVisible()");
-    const entityId = entityIdFrom(entity, "HostWorld.isVisible()");
+    assertPeerId(peerId, "ServerWorld.isVisible()");
+    const entityId = entityIdFrom(entity, "ServerWorld.isVisible()");
     const override = this.#visibility.get(peerId)?.get(entityId);
     if (override !== undefined) {
       return override;
@@ -1844,7 +1844,7 @@ class HostWorldImpl implements HostWorld {
     if (this.#interest !== undefined) {
       const visible = this.#interest(peerId, this.#core._readonlyEntityRef(entityId), this.#interestWorld);
       if (typeof visible !== "boolean") {
-        throw new Error("createHostWorld() interest must return a boolean");
+        throw new Error("createServerWorld() interest must return a boolean");
       }
       return visible;
     }
@@ -1865,7 +1865,7 @@ class HostWorldImpl implements HostWorld {
 
   #frameContext(): FrameContext {
     const nowMs = this.#clock.nowMs();
-    assertMonotonicNowMs("createHostWorld()", this.#lastNowMs, nowMs);
+    assertMonotonicNowMs("createServerWorld()", this.#lastNowMs, nowMs);
     const dtMs = this.#lastNowMs === undefined ? 0 : nowMs - this.#lastNowMs;
     this.#lastNowMs = nowMs;
     this.#systemTick += 1;
@@ -1920,19 +1920,19 @@ export interface ClientWorld {
   system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void;
   /** Advances transport input and client systems once. */
   tick(): void;
-  /** Sends a client-to-host command. */
+  /** Sends a client-to-server command. */
   send<TFields extends FieldDefinitions>(
     rpc: CommandDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
-  /** Handles a host-to-client event. */
+  /** Handles a server-to-client event. */
   on<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     handler: RpcHandler<TFields>,
   ): () => void;
   /** Registers a post-apply snapshot callback. The returned function unregisters it. */
   onSnapshot(handler: SnapshotHandler<ClientWorld>): () => void;
-  /** Requests a reliable full snapshot from the host. */
+  /** Requests a reliable full snapshot from the server. */
   requestFullSnapshot(): void;
 }
 
@@ -2093,9 +2093,9 @@ class ClientWorldImpl implements ClientWorld {
   }
 }
 
-/** Creates an authoritative host world. There is no public local-only world factory. */
-export function createHostWorld(options: HostWorldOptions): HostWorld {
-  return new HostWorldImpl(options);
+/** Creates an authoritative server world. There is no public local-only world factory. */
+export function createServerWorld(options: ServerWorldOptions): ServerWorld {
+  return new ServerWorldImpl(options);
 }
 
 /** Creates a replicated client world. Client replicated state is read-only and driven by snapshots. */
@@ -2103,13 +2103,13 @@ export function createClientWorld(options: ClientWorldOptions): ClientWorld {
   return new ClientWorldImpl(options);
 }
 
-function hostRuntimeOptions(
-  world: HostWorld,
-  transport: QueuedHostTransport,
-  options: HostWorldOptions,
+function serverRuntimeOptions(
+  world: ServerWorld,
+  transport: QueuedServerTransport,
+  options: ServerWorldOptions,
   clock: Clock,
   canReusePeerSnapshots: () => boolean,
-): SyncHostOptions {
+): SyncServerOptions {
   const extra: { logger?: Logger } = {};
   if (options.logger !== undefined) {
     extra.logger = options.logger;
@@ -2203,33 +2203,33 @@ function rpcKindArticle(kind: ExpectedRpcKind): string {
   return kind === "event" ? "an event" : "a command";
 }
 
-function assertHostWorldOptions(options: unknown): asserts options is HostWorldOptions {
-  const source = assertOptionObject("createHostWorld", options);
-  assertProtocol("createHostWorld", source.protocol);
-  assertHostTransport(source.transport);
-  assertClock("createHostWorld", source.clock);
-  assertLogger("createHostWorld", source.logger);
+function assertServerWorldOptions(options: unknown): asserts options is ServerWorldOptions {
+  const source = assertOptionObject("createServerWorld", options);
+  assertProtocol("createServerWorld", source.protocol);
+  assertServerTransport(source.transport);
+  assertClock("createServerWorld", source.clock);
+  assertLogger("createServerWorld", source.logger);
   if (
     source.visibility !== undefined &&
     source.visibility !== "all" &&
     source.visibility !== "none"
   ) {
-    throw new Error('createHostWorld() visibility must be "all" or "none"');
+    throw new Error('createServerWorld() visibility must be "all" or "none"');
   }
   if (
     source.snapshotEncoding !== undefined &&
     source.snapshotEncoding !== "default" &&
     source.snapshotEncoding !== "batched"
   ) {
-    throw new Error('createHostWorld() snapshotEncoding must be "default" or "batched"');
+    throw new Error('createServerWorld() snapshotEncoding must be "default" or "batched"');
   }
   if (source.interest !== undefined && !isFunction(source.interest)) {
-    throw new Error("createHostWorld() interest must be a function");
+    throw new Error("createServerWorld() interest must be a function");
   }
   if (source.channel !== undefined) {
-    throw new Error("createHostWorld() does not accept channel; control and snapshots use reliable, while RPCs declare their own channel");
+    throw new Error("createServerWorld() does not accept channel; control and snapshots use reliable, while RPCs declare their own channel");
   }
-  assertKnownOptionKeys("createHostWorld", source, hostWorldOptionKeys);
+  assertKnownOptionKeys("createServerWorld", source, serverWorldOptionKeys);
 }
 
 function assertClientWorldOptions(options: unknown): asserts options is ClientWorldOptions {
@@ -2244,7 +2244,7 @@ function assertClientWorldOptions(options: unknown): asserts options is ClientWo
   assertKnownOptionKeys("createClientWorld", source, clientWorldOptionKeys);
 }
 
-const hostWorldOptionKeys = new Set([
+const serverWorldOptionKeys = new Set([
   "protocol",
   "transport",
   "clock",
@@ -2263,7 +2263,7 @@ const clientWorldOptionKeys = new Set([
 ]);
 
 function assertKnownOptionKeys(
-  factoryName: "createHostWorld" | "createClientWorld",
+  factoryName: "createServerWorld" | "createClientWorld",
   options: Record<string, unknown>,
   knownKeys: ReadonlySet<string>,
 ): void {
@@ -2275,7 +2275,7 @@ function assertKnownOptionKeys(
 }
 
 function assertOptionObject(
-  factoryName: "createHostWorld" | "createClientWorld",
+  factoryName: "createServerWorld" | "createClientWorld",
   options: unknown,
 ): Record<string, unknown> {
   if (!isPlainObjectMap(options)) {
@@ -2285,7 +2285,7 @@ function assertOptionObject(
 }
 
 function assertProtocol(
-  factoryName: "createHostWorld" | "createClientWorld",
+  factoryName: "createServerWorld" | "createClientWorld",
   protocol: unknown,
 ): asserts protocol is ProtocolDefinition {
   if (!isProtocolDefinition(protocol)) {
@@ -2293,7 +2293,7 @@ function assertProtocol(
   }
 }
 
-function assertHostTransport(transport: unknown): asserts transport is HostTransport {
+function assertServerTransport(transport: unknown): asserts transport is ServerTransport {
   if (
     transport === null ||
     typeof transport !== "object" ||
@@ -2301,7 +2301,7 @@ function assertHostTransport(transport: unknown): asserts transport is HostTrans
     !isFunction((transport as { readonly broadcast?: unknown }).broadcast) ||
     !isFunction((transport as { readonly onPacket?: unknown }).onPacket)
   ) {
-    throw new Error("createHostWorld() requires a host transport with send(), broadcast(), and onPacket()");
+    throw new Error("createServerWorld() requires a server transport with send(), broadcast(), and onPacket()");
   }
 }
 
@@ -2317,7 +2317,7 @@ function assertClientTransport(transport: unknown): asserts transport is ClientT
 }
 
 function assertClock(
-  factoryName: "createHostWorld" | "createClientWorld",
+  factoryName: "createServerWorld" | "createClientWorld",
   clock: unknown,
 ): asserts clock is Clock {
   if (
@@ -2331,7 +2331,7 @@ function assertClock(
 }
 
 function assertLogger(
-  factoryName: "createHostWorld" | "createClientWorld",
+  factoryName: "createServerWorld" | "createClientWorld",
   logger: unknown,
 ): asserts logger is Logger | undefined {
   if (logger === undefined) {
@@ -2348,7 +2348,7 @@ function assertLogger(
   }
 }
 
-function checkedClock(factoryName: "createHostWorld()" | "createClientWorld()", clock: Clock): Clock {
+function checkedClock(factoryName: "createServerWorld()" | "createClientWorld()", clock: Clock): Clock {
   return {
     nowMs() {
       const nowMs = clock.nowMs();
@@ -2368,7 +2368,7 @@ function checkedClock(factoryName: "createHostWorld()" | "createClientWorld()", 
 }
 
 function assertMonotonicNowMs(
-  factoryName: "createHostWorld()" | "createClientWorld()",
+  factoryName: "createServerWorld()" | "createClientWorld()",
   previousNowMs: number | undefined,
   nowMs: number,
 ): void {

@@ -15,7 +15,7 @@ import {
   SnapshotOp,
 } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
 
 describe("snapshot sync", () => {
   it("applies create snapshots with final field values", () => {
@@ -27,7 +27,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
 
     const player = a.spawn(Player);
@@ -46,7 +46,7 @@ describe("snapshot sync", () => {
       hp: u16(100),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player, { hp: 77 });
     const createReader = new BitReader(encodeDirty(world, 1));
 
@@ -81,7 +81,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player);
 
@@ -99,7 +99,7 @@ describe("snapshot sync", () => {
     });
     const PlayerState = Player.component;
     const protocol = testProtocol(Player);
-    const world = createTestHostWorld(protocol);
+    const world = createTestServerWorld(protocol);
     const first = world.spawn(Player);
     const second = world.spawn(Player);
 
@@ -129,7 +129,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const first = a.spawn(Player);
     const second = a.spawn(Player);
@@ -163,7 +163,7 @@ describe("snapshot sync", () => {
     });
     const PlayerState = Player.component;
     const protocol = testProtocol(Player);
-    const world = createTestHostWorld(protocol);
+    const world = createTestServerWorld(protocol);
     const first = world.spawn(Player);
     const second = world.spawn(Player);
 
@@ -195,7 +195,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player, { hp: 40 });
 
@@ -213,7 +213,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player);
 
@@ -231,7 +231,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player);
 
@@ -250,7 +250,7 @@ describe("snapshot sync", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const first = a.spawn(Player);
     const second = a.spawn(Player, { hp: 20 });
@@ -285,7 +285,7 @@ describe("snapshot sync", () => {
       hp: { ...u16(0), codec: throwingCodec } as ReturnType<typeof u16>,
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
 
     encodeDirty(world, 1);
@@ -302,7 +302,7 @@ describe("snapshot sync", () => {
       hp: u16(100),
     });
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     a.spawn(Player);
 

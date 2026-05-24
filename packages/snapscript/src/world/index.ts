@@ -1,4 +1,4 @@
-export { createClientWorld, createHostWorld } from "./world";
+export { createClientWorld, createServerWorld } from "./world";
 export type {
   ClientWorld,
   ClientWorldOptions,
@@ -10,8 +10,8 @@ export type {
   EachFn,
   EntityInstance,
   EntityRef,
-  HostWorld,
-  HostWorldOptions,
+  ServerWorld,
+  ServerWorldOptions,
   InterestWorld,
   PrefabComponentsOf,
   QueryResult,

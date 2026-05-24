@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { ClientPeer, HostPeer, type PeerSnapshot } from "./sync-demo";
+import { ClientPeer, ServerPeer, type PeerSnapshot } from "./sync-demo";
 
-type Mode = "home" | "host" | "client";
+type Mode = "home" | "server" | "client";
 
 const mode = computed<Mode>(() => {
-  if (window.location.pathname === "/host") {
-    return "host";
+  if (window.location.pathname === "/server") {
+    return "server";
   }
   if (window.location.pathname === "/client") {
     return "client";
@@ -14,11 +14,11 @@ const mode = computed<Mode>(() => {
   return "home";
 });
 
-const host = mode.value === "host" ? new HostPeer() : undefined;
+const server = mode.value === "server" ? new ServerPeer() : undefined;
 const client = mode.value === "client" ? new ClientPeer() : undefined;
 
 const peerState = ref<PeerSnapshot>(
-  host?.snapshot() ??
+  server?.snapshot() ??
     client?.snapshot() ?? {
       connected: false,
       error: undefined,
@@ -35,8 +35,8 @@ const wsUrl = computed(() => {
 });
 
 const pageTitle = computed(() => {
-  if (mode.value === "host") {
-    return "Host";
+  if (mode.value === "server") {
+    return "Server";
   }
   if (mode.value === "client") {
     return "Client";
@@ -47,9 +47,9 @@ const pageTitle = computed(() => {
 let frame = 0;
 
 function refresh() {
-  host?.tick();
+  server?.tick();
   client?.tick();
-  peerState.value = host?.snapshot() ?? client?.snapshot() ?? peerState.value;
+  peerState.value = server?.snapshot() ?? client?.snapshot() ?? peerState.value;
 }
 
 function animate() {
@@ -58,14 +58,14 @@ function animate() {
 }
 
 onMounted(() => {
-  host?.connect(wsUrl.value);
+  server?.connect(wsUrl.value);
   client?.connect(wsUrl.value);
   frame = window.requestAnimationFrame(animate);
 });
 
 onUnmounted(() => {
   window.cancelAnimationFrame(frame);
-  host?.dispose();
+  server?.dispose();
   client?.dispose();
 });
 
@@ -79,16 +79,16 @@ function n(value: number | undefined, digits = 0): string {
     <header class="topbar">
       <div>
         <h1>{{ pageTitle }}</h1>
-        <p v-if="mode === 'home'">Open Host and Client in separate browser pages. The Vite dev server relays WebSocket packets between them.</p>
-        <p v-else-if="mode === 'host'">Host world. Local NetRef writes produce dirty snapshots; client joins request a full snapshot.</p>
+        <p v-if="mode === 'home'">Open Server and Client in separate browser pages. The Vite dev server relays WebSocket packets between them.</p>
+        <p v-else-if="mode === 'server'">Server world. Local NetRef writes produce dirty snapshots; client joins request a full snapshot.</p>
         <p v-else>Client world. Binary snapshots arrive over WebSocket and apply through the client world.</p>
       </div>
       <div class="endpoint">{{ wsUrl }}</div>
     </header>
 
     <section v-if="mode === 'home'" class="home">
-      <a class="launch" href="/host" target="_blank" rel="noreferrer">
-        <strong>Open Host</strong>
+      <a class="launch" href="/server" target="_blank" rel="noreferrer">
+        <strong>Open Server</strong>
         <span>Controls authoritative state and sends snapshots.</span>
       </a>
       <a class="launch" href="/client" target="_blank" rel="noreferrer">
@@ -101,8 +101,8 @@ function n(value: number | undefined, digits = 0): string {
       <article class="panel">
         <div class="panel-head">
           <div>
-            <h2>{{ mode === "host" ? "Host Instance" : "Client Instance" }}</h2>
-            <p>{{ mode === "host" ? "Host Session" : "Client Session" }}</p>
+            <h2>{{ mode === "server" ? "Server Instance" : "Client Instance" }}</h2>
+            <p>{{ mode === "server" ? "Server Session" : "Client Session" }}</p>
           </div>
           <span :class="['status', peerState.connected ? 'online' : 'offline']">
             {{ peerState.connected ? "online" : "offline" }}
@@ -134,7 +134,7 @@ function n(value: number | undefined, digits = 0): string {
         </div>
 
         <div v-else class="actions">
-          <button @click="host?.sendFull()">Send Full</button>
+          <button @click="server?.sendFull()">Send Full</button>
         </div>
 
         <div class="mirror">

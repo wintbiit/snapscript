@@ -10,38 +10,38 @@ Run:
 pnpm test:examples
 ```
 
-The smoke test imports the example modules and runs host/client flows with in-memory transports:
+The smoke test imports the example modules and runs server/client flows with in-memory transports:
 
 - `examples/simple`
-  - host creates one authoritative player
+  - server creates one authoritative player
   - client receives the full snapshot
   - client sends `DamageCommand`
-  - host mutates authoritative `NetRef.value`
+  - server mutates authoritative `NetRef.value`
   - client receives `DamageEvent` and updated replicated health
 
 - `examples/ecs`
-  - host creates player and NPC prefabs
-  - host uses explicit all-visible interest policy
-  - host opts into negotiated batched dirty snapshots
+  - server creates player and NPC prefabs
+  - server uses explicit all-visible interest policy
+  - server opts into negotiated batched dirty snapshots
   - client receives replicated query rows
   - client sends movement and damage commands
-  - host system and command handlers update components
+  - server system and command handlers update components
   - client receives event state and can run its benchmark path
 
 ## API Friction Found
 
-Before this pass, both examples constructed `WebSocketTransport` internally. That made them easy to run in a browser but hard to validate or adapt to another host engine.
+Before this pass, both examples constructed `WebSocketTransport` internally. That made them easy to run in a browser but hard to validate or adapt to another server engine.
 
 The examples now accept injectable transport and clock objects while preserving the browser defaults:
 
 ```ts
-const host = new HostDemo(customTransport, customClock);
+const server = new ServerDemo(customTransport, customClock);
 const client = new ClientDemo(customTransport, customClock);
 ```
 
 This matches the framework boundary:
 
-- the host application creates and owns worlds
+- the server application creates and owns worlds
 - transport reliability and connection lifetime stay outside SnapScript
 - examples can run with WebSocket, in-memory tests, or engine adapters
 
@@ -50,7 +50,7 @@ This matches the framework boundary:
 Keep examples aligned with these user paths:
 
 - first-time developer can copy the protocol/world setup into their own app
-- host logic mutates only through world APIs and `NetRef.value`
+- server logic mutates only through world APIs and `NetRef.value`
 - client logic cannot mutate replicated state
 - transport adapters pass bytes and channel names without wrapping SnapScript packets in another framework protocol
 - all-visible examples should use `visibility: "all"` instead of dummy peer-specific overrides
@@ -60,14 +60,14 @@ Keep examples aligned with these user paths:
 - `query().map()` and `query().forEach()` are acceptable for ordinary readable code, but hot render/system paths should still graduate to `each()`
 - repeated systems/render paths should reuse named query tuples so type inference and component-id caching both apply
 - render loops should include all required components in the same `each()` query instead of doing per-row `get()` lookups
-- helpers that only read replicated state should accept `ReplicatedStateReader`, so host/client rendering paths share one implementation without local casts
+- helpers that only read replicated state should accept `ReplicatedStateReader`, so server/client rendering paths share one implementation without local casts
 
 ## Benchmark Mapping
 
 Performance experiments should be tied back to those same user paths:
 
-- `examples/ecs` host movement maps to `each+mutate` and the example-derived movement benchmark.
+- `examples/ecs` server movement maps to `each+mutate` and the example-derived movement benchmark.
 - `examples/ecs` UI rendering maps to `client readonly render views`, `client readonly each render views`, `client readonly pair query.forEach render views`, and `client readonly pair each render views`.
-- `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, client apply, and host dirty fanout benchmarks.
+- `examples/ecs` all-visible batched sync maps to homogeneous `encode dirty batched`, client apply, and server dirty fanout benchmarks.
 
 When public APIs change, update the examples first, then run `pnpm test:examples`, `pnpm example:simple:build`, and `pnpm example:ecs:build`.

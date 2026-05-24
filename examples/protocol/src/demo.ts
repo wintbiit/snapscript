@@ -1,11 +1,11 @@
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   ServerPeerId,
   type ChannelName,
   type ClientTransport,
   type Clock,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
 } from "snapscript";
 import {
@@ -18,7 +18,7 @@ import {
   rpc,
 } from "../generated/protocol";
 
-class LocalLink implements HostTransport, ClientTransport {
+class LocalLink implements ServerTransport, ClientTransport {
   readonly #peer: PeerRef = "client-1";
   #hostHandler?: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void;
   #clientHandler?: (channel: ChannelName, bytes: Uint8Array) => void;
@@ -72,16 +72,16 @@ function clock(): Clock {
 }
 
 const link = new LocalLink();
-const hostWorld = createHostWorld({ protocol, transport: link, clock: clock() });
+const serverWorld = createServerWorld({ protocol, transport: link, clock: clock() });
 const clientWorld = createClientWorld({ protocol, transport: link, clock: clock() });
 
-const player = hostWorld.spawn(Player, {
+const player = serverWorld.spawn(Player, {
   position: { x: 0, y: 0 },
   health: { hp: 100 },
 });
 
-rpc.commands.MovementMove.on(hostWorld, (ctx) => {
-  const position = hostWorld.get(player, Position);
+rpc.commands.MovementMove.on(serverWorld, (ctx) => {
+  const position = serverWorld.get(player, Position);
   if (position === undefined) {
     return;
   }
@@ -90,7 +90,7 @@ rpc.commands.MovementMove.on(hostWorld, (ctx) => {
   position.y.value += ctx.payload.dy;
 
   if (Math.abs(position.x.value) > 5 || Math.abs(position.y.value) > 5) {
-    rpc.events.MovementMoveDisabled.sendTo(hostWorld, ctx.sender, { disabled: true });
+    rpc.events.MovementMoveDisabled.sendTo(serverWorld, ctx.sender, { disabled: true });
   }
 });
 
@@ -99,15 +99,15 @@ rpc.events.MovementMoveDisabled.on(clientWorld, (ctx) => {
 });
 
 clientWorld.tick();
-hostWorld.tick();
+serverWorld.tick();
 clientWorld.tick();
 
-hostWorld.setOwner(player, clientWorld.myPeerId());
-hostWorld.tick();
+serverWorld.setOwner(player, clientWorld.myPeerId());
+serverWorld.tick();
 clientWorld.tick();
 
 rpc.commands.MovementMove.send(clientWorld, { dx: 1, dy: 0 });
-hostWorld.tick();
+serverWorld.tick();
 clientWorld.tick();
 
 const replicatedPosition = clientWorld.get(player.id, Position);

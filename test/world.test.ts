@@ -3,7 +3,7 @@ import { defineEntity, qf32, u16, vec2q } from "../packages/snapscript/src/index
 import { createRegistry } from "../packages/snapscript/src/registry/index";
 import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
 
 describe("world and NetRef", () => {
   it("marks changed local refs dirty", () => {
@@ -12,7 +12,7 @@ describe("world and NetRef", () => {
       maxHp: u16(100),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 
@@ -29,7 +29,7 @@ describe("world and NetRef", () => {
       hp: u16(100),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 
@@ -44,7 +44,7 @@ describe("world and NetRef", () => {
       x: qf32({ min: -10, max: 10, precision: 0.1, default: 1 }),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 
@@ -59,7 +59,7 @@ describe("world and NetRef", () => {
       pos: vec2q({ min: -100, max: 100, precision: 0.01, default: { x: 0, y: 0 } }),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 
@@ -85,7 +85,7 @@ describe("world and NetRef", () => {
       pos: vec2q({ min: -100, max: 100, precision: 0.01, default: { x: 0, y: 0 } }),
     });
     const PlayerState = Player.component;
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const player = world.spawn(Player);
     const state = world.get(player, PlayerState)!;
 
@@ -105,7 +105,7 @@ describe("world and NetRef", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const player = a.spawn(Player);
     const state = a.get(player, PlayerState)!;

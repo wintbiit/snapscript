@@ -32,8 +32,8 @@ experience layer, not a replacement runtime.
 - Make protocol definitions a single source of truth.
 - Reduce repetitive handwritten protocol/RPC binding code.
 - Generate portable TypeScript that can run in puerts, Node.js, browsers, and other JS runtimes.
-- Keep host/client world construction unchanged: `createHostWorld()` and `createClientWorld()`.
-- Keep transports outside the protocol IDL. The host layer still owns reliability and connection
+- Keep server/client world construction unchanged: `createServerWorld()` and `createClientWorld()`.
+- Keep transports outside the protocol IDL. The server/engine layer still owns reliability and connection
   lifecycle.
 - Generate stable component, RPC, and field ids.
 - Fail early during check/generate when schema definitions are inconsistent.
@@ -98,7 +98,7 @@ The lock file should track at least:
 }
 ```
 
-Host/client protocol mismatches should be discovered before gameplay runs, preferably by generated
+Server/client protocol mismatches should be discovered before gameplay runs, preferably by generated
 manifest checks in build, CI, or startup bootstrap. The runtime protocol layer should not grow a
 large compatibility system before the IDL workflow exists.
 
@@ -109,7 +109,7 @@ We should own a `.snap` DSL instead of making `.proto` or `.fbs` the primary for
 Reasons:
 
 - SnapScript has first-class concepts that generic message IDLs do not: `component`, `entity`,
-  `command`, `event`, quantized fields, dirty field masks, and host/client RPC direction.
+  `command`, `event`, quantized fields, dirty field masks, and server/client RPC direction.
 - Protobuf field numbers are useful, but protobuf messages do not naturally express replicated ECS
   snapshot semantics.
 - FlatBuffers is optimized for a different object/table model and would add a heavier external
@@ -207,19 +207,19 @@ The generated code may expose helpers like:
 
 ```ts
 rpc.commands.MovementMove.send(clientWorld, { dx: 1, dy: 0 });
-rpc.commands.MovementMove.on(hostWorld, (ctx) => {
+rpc.commands.MovementMove.on(serverWorld, (ctx) => {
   ctx.payload.dx;
   ctx.sender;
 });
 
-rpc.events.MovementMoveDisabled.broadcast(hostWorld, { disabled: true });
+rpc.events.MovementMoveDisabled.broadcast(serverWorld, { disabled: true });
 rpc.events.MovementMoveDisabled.on(clientWorld, (ctx) => {
   ctx.payload.disabled;
 });
 ```
 
 This keeps the world API unchanged while making generated usage more declarative. The raw
-`clientWorld.send(Move, payload)`, `hostWorld.on(Move, handler)`, `hostWorld.broadcast(Event,
+`clientWorld.send(Move, payload)`, `serverWorld.on(Move, handler)`, `serverWorld.broadcast(Event,
 payload)`, and `clientWorld.on(Event, handler)` APIs remain available.
 
 ## Open Questions

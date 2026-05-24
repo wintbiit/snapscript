@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineComponent,
   defineEntity,
   defineProtocol,
@@ -11,15 +11,15 @@ import {
   type ClientTransport,
   type Clock,
   type ComponentSchema,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
-import { createSyncHost } from "../packages/snapscript/src/runtime/index";
+import { createSyncServer } from "../packages/snapscript/src/runtime/index";
 import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
 import type { ComponentRecord } from "../packages/snapscript/src/world/records";
 import { SparseSetComponentStorage } from "../packages/snapscript/src/world/storage";
-import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
 
 function clock(): Clock {
   let tick = 0;
@@ -32,7 +32,7 @@ function clock(): Clock {
   };
 }
 
-class RecordingTransport implements ClientTransport, HostTransport {
+class RecordingTransport implements ClientTransport, ServerTransport {
   readonly channels: ChannelName[] = [];
   readonly peer: PeerRef = {};
   #clientHandler?: (channel: ChannelName, bytes: Uint8Array) => void;
@@ -79,7 +79,7 @@ describe("ecs world", () => {
     const Health = defineComponent("EcsHealth", {
       hp: u16(100),
     });
-    const world = createTestHostWorld(testProtocol(Position, Health));
+    const world = createTestServerWorld(testProtocol(Position, Health));
 
     const entity = world.spawn();
     const pos = world.add(entity, Position, { x: 4 });
@@ -97,7 +97,7 @@ describe("ecs world", () => {
     const Position = defineComponent("EmptySpawnPosition", {
       x: qf32({ min: -100, max: 100, precision: 0.01, default: 0 }),
     });
-    const world = createTestHostWorld(testProtocol(Position));
+    const world = createTestServerWorld(testProtocol(Position));
 
     const entity = world.spawn();
     const position = world.add(entity, Position, { x: 3 });
@@ -126,7 +126,7 @@ describe("ecs world", () => {
     const Position = defineComponent("SparseSwapPosition", {
       x: qf32({ min: -100, max: 100, precision: 0.01, default: 0 }),
     });
-    const world = createTestHostWorld(testProtocol(Position));
+    const world = createTestServerWorld(testProtocol(Position));
     const first = world.spawn();
     const second = world.spawn();
     world.add(first, Position, { x: 1 });
@@ -149,7 +149,7 @@ describe("ecs world", () => {
     const Health = defineComponent("ArchetypeHealth", {
       hp: u16(100),
     });
-    const world = createTestHostWorld(testProtocol(Position, Velocity, Health));
+    const world = createTestServerWorld(testProtocol(Position, Velocity, Health));
     const mover = world.spawn();
     const partial = world.spawn();
     world.add(mover, Position);
@@ -276,7 +276,7 @@ describe("ecs world", () => {
     const Health = defineComponent("QueryHelpersHealth", {
       hp: u16(100),
     });
-    const world = createTestHostWorld(testProtocol(Position, Health));
+    const world = createTestServerWorld(testProtocol(Position, Health));
     const first = world.spawn();
     const second = world.spawn();
     world.add(first, Position, { x: 1 });
@@ -312,7 +312,7 @@ describe("ecs world", () => {
     const Team = defineComponent("EachTeam", {
       id: u16(1),
     });
-    const world = createTestHostWorld(testProtocol(Position, Velocity, Health, Team));
+    const world = createTestServerWorld(testProtocol(Position, Velocity, Health, Team));
     const moving = world.spawn();
     const idle = world.spawn();
     world.add(moving, Position, { x: 1 });
@@ -362,7 +362,7 @@ describe("ecs world", () => {
       position: Position,
       health: Health,
     });
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
 
     const player = world.spawn(Player, {
       position: { x: 2 },
@@ -416,7 +416,7 @@ describe("ecs world", () => {
     const Simple = defineEntity("InitialSimple", {
       hp: u16(100),
     });
-    const world = createTestHostWorld(testProtocol(Position, Health, Player, Simple));
+    const world = createTestServerWorld(testProtocol(Position, Health, Player, Simple));
     const entity = world.spawn();
 
     expect(() => world.add(entity, Position, { y: 1 } as never)).toThrow(/unknown field "y"/);
@@ -443,7 +443,7 @@ describe("ecs world", () => {
   });
 
   it("runs systems in phase order", () => {
-    const world = createTestHostWorld();
+    const world = createTestServerWorld();
     const order: string[] = [];
 
     world.system("pre", "preUpdate", () => order.push("pre"));
@@ -456,7 +456,7 @@ describe("ecs world", () => {
   });
 
   it("fails fast for invalid system registrations", () => {
-    const host = createTestHostWorld();
+    const host = createTestServerWorld();
     const client = createTestClientWorld();
 
     expect(() => host.system("", "update", () => {})).toThrow(/non-empty system name/);
@@ -475,7 +475,7 @@ describe("ecs world", () => {
   });
 
   it("freezes system contexts shared within a phase", () => {
-    const host = createTestHostWorld();
+    const host = createTestServerWorld();
     const seen: string[] = [];
 
     host.system("first", "update", (_world, context) => {
@@ -496,7 +496,7 @@ describe("ecs world", () => {
   });
 
   it("runs systems from a stable phase snapshot", () => {
-    const host = createTestHostWorld();
+    const host = createTestServerWorld();
     const order: string[] = [];
     let registeredLate = false;
 
@@ -527,7 +527,7 @@ describe("ecs world", () => {
         return networkTick;
       },
     };
-    const host = createHostWorld({
+    const host = createServerWorld({
       protocol,
       transport: new RecordingTransport(),
       clock: timedClock,
@@ -617,7 +617,7 @@ describe("ecs world", () => {
     });
     const registry = createRegistry().registerComponent(Position).registerComponent(Health);
     const protocol = testProtocol(Player);
-    const a = createTestHostWorld(protocol);
+    const a = createTestServerWorld(protocol);
     const b = createTestClientWorld(protocol);
     const entity = a.spawn(Player, {
       position: { x: 1 },
@@ -656,12 +656,12 @@ describe("ecs world", () => {
       x: qf32({ min: -10, max: 10, precision: 0.01, default: 0 }),
     });
     const registry = createRegistry().registerComponent(Position);
-    const world = createTestHostWorld(testProtocol(Position));
+    const world = createTestServerWorld(testProtocol(Position));
     const entity = world.spawn();
     const pos = world.add(entity, Position);
     encodeDirty(world, 1);
     const transport = new RecordingTransport();
-    const host = createSyncHost({ world, transport, clock: clock(), registry });
+    const host = createSyncServer({ world, transport, clock: clock(), registry });
 
     pos.x.value = 1;
     host.update();

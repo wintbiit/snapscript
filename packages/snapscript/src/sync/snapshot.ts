@@ -1,12 +1,12 @@
 import { BitReader, BitWriter } from "../binary/index";
 import type { RegistryLike } from "../registry/index";
 import { codecForSchema } from "../schema/schema";
-import type { ClientWorld, HostWorld } from "../world/index";
+import type { ClientWorld, ServerWorld } from "../world/index";
 import { worldInternals } from "../world/internals";
 import type { DirtyOps } from "../world/dirty-graph";
 import { MessageType } from "./message";
 
-type SnapshotWorld = HostWorld | ClientWorld;
+type SnapshotWorld = ServerWorld | ClientWorld;
 const MAX_POOLED_WRITERS = 16;
 const MAX_LINEAR_BATCH_GROUPS = 16;
 const writerPool: BitWriter[] = [];

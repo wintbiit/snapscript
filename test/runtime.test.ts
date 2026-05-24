@@ -11,11 +11,11 @@ import {
   type Clock,
   type PeerRef,
   type Logger,
-  type HostTransport,
+  type ServerTransport,
   ServerPeerId,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
-import { createSyncClient, createSyncHost } from "../packages/snapscript/src/runtime/index";
+import { createSyncClient, createSyncServer } from "../packages/snapscript/src/runtime/index";
 import { BitReader } from "../packages/snapscript/src/binary/index";
 import {
   applySnapshot,
@@ -26,9 +26,9 @@ import {
   SnapshotOp,
 } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestHostWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
 
-class ManualTransport implements ClientTransport, HostTransport {
+class ManualTransport implements ClientTransport, ServerTransport {
   peer?: ManualTransport;
   readonly packets: Uint8Array[] = [];
   readonly peerId: PeerRef = {};
@@ -72,7 +72,7 @@ class ManualTransport implements ClientTransport, HostTransport {
   }
 }
 
-class PeerHostTransport implements HostTransport {
+class PeerServerTransport implements ServerTransport {
   readonly sent: { peer: PeerRef; channel: ChannelName; bytes: Uint8Array }[] = [];
   #handler?: (peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void;
 
@@ -141,13 +141,13 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player, { hp: 80 });
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({
-      world: hostWorld,
-      transport: hostTransport,
+    const player = serverWorld.spawn(Player, { hp: 80 });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
       clock: clock(),
       registry,
     });
@@ -168,18 +168,18 @@ describe("sync runtime", () => {
     expect(host).toBeDefined();
   });
 
-  it("sends dirty snapshots on host update without client dirty echo", () => {
+  it("sends dirty snapshots on server update without client dirty echo", () => {
     const Player = defineEntity("RuntimeDirtyPlayer", {
       hp: u16(100),
     });
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player);
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const player = serverWorld.spawn(Player);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -188,7 +188,7 @@ describe("sync runtime", () => {
     });
     client.start();
 
-    hostWorld.get(player, PlayerState)!.hp.value = 40;
+    serverWorld.get(player, PlayerState)!.hp.value = 40;
     host.update();
 
     expect(clientWorld.get(player.id, PlayerState)?.hp.value).toBe(40);
@@ -206,11 +206,11 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState).registerRpc(Move);
     const protocol = testProtocol(Player, Move);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player);
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const player = serverWorld.spawn(Player);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -218,7 +218,7 @@ describe("sync runtime", () => {
       registry,
     });
     host.on(Move, (ctx) => {
-      hostWorld.get(player, PlayerState)!.x.value += ctx.payload.dx;
+      serverWorld.get(player, PlayerState)!.x.value += ctx.payload.dx;
     });
     client.start();
 
@@ -237,10 +237,10 @@ describe("sync runtime", () => {
     });
     const registry = createRegistry().registerRpc(Move).registerRpc(Damage);
     const protocol = testProtocol(Move, Damage);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -273,11 +273,11 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player);
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const player = serverWorld.spawn(Player);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -285,23 +285,23 @@ describe("sync runtime", () => {
       registry,
     });
 
-    hostWorld.setOwner(player, 1);
+    serverWorld.setOwner(player, 1);
     client.start();
 
     expect(client.peerId()).toBe(1);
     expect(clientWorld.ownerOf(player.id)).toBe(1);
     expect(clientWorld.get(player.id, PlayerState)).toBeDefined();
 
-    hostWorld.clearOwner(player);
+    serverWorld.clearOwner(player);
     host.update();
     expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
-    expect(hostTransport.packets.at(-1)).toBeDefined();
+    expect(serverTransport.packets.at(-1)).toBeDefined();
 
-    hostWorld.setOwner(player, 1);
+    serverWorld.setOwner(player, 1);
     host.update();
     expect(clientWorld.ownerOf(player.id)).toBe(1);
 
-    hostWorld.destroy(player);
+    serverWorld.destroy(player);
     host.update();
     expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
     expect(clientWorld.get(player.id, PlayerState)).toBeUndefined();
@@ -312,13 +312,13 @@ describe("sync runtime", () => {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
     });
     const registry = createRegistry().registerRpc(Move);
-    const hostWorld = createTestHostWorld(testProtocol(Move));
+    const serverWorld = createTestServerWorld(testProtocol(Move));
     const clientWorld = createTestClientWorld(testProtocol(Move));
-    const [hostTransport, clientTransport] = pair();
+    const [serverTransport, clientTransport] = pair();
     const errors: string[] = [];
-    const host = createSyncHost({
-      world: hostWorld,
-      transport: hostTransport,
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
       clock: clock(),
       registry,
       logger: {
@@ -355,10 +355,10 @@ describe("sync runtime", () => {
     });
     const registry = createRegistry().registerComponent(Player.component).registerRpc(Damage);
     const protocol = testProtocol(Player, Damage);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -381,10 +381,10 @@ describe("sync runtime", () => {
       amount: u16(0),
     });
     const registry = createRegistry().registerRpc(Damage);
-    const hostWorld = createTestHostWorld(testProtocol(Damage));
+    const serverWorld = createTestServerWorld(testProtocol(Damage));
     const clientWorld = createTestClientWorld(testProtocol(Damage));
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const errors: string[] = [];
     const client = createSyncClient({
       world: clientWorld,
@@ -414,10 +414,10 @@ describe("sync runtime", () => {
       amount: u16(0),
     });
     const registry = createRegistry().registerRpc(Damage);
-    const hostWorld = createTestHostWorld(testProtocol(Damage));
+    const serverWorld = createTestServerWorld(testProtocol(Damage));
     const clientWorld = createTestClientWorld(testProtocol(Damage));
-    const [hostTransport, clientTransport] = pair();
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -448,14 +448,14 @@ describe("sync runtime", () => {
       amount: u16(0),
     });
     const registry = createRegistry();
-    const hostWorld = createTestHostWorld();
+    const serverWorld = createTestServerWorld();
     const clientWorld = createTestClientWorld();
-    const [hostTransport, clientTransport] = pair();
+    const [serverTransport, clientTransport] = pair();
     const errors: string[] = [];
     const logger: Logger = {
       error: (message, context) => errors.push(`${message}:${String(context?.error)}`),
     };
-    const host = createSyncHost({ world: hostWorld, transport: hostTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
     createSyncClient({
       world: clientWorld,
       transport: clientTransport,
@@ -476,15 +476,15 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player);
+    const player = serverWorld.spawn(Player);
     const visible = new Map<number, boolean>();
     const peerA = "peer-a";
     const peerB = "peer-b";
-    const transport = new PeerHostTransport();
-    const host = createSyncHost({
-      world: hostWorld,
+    const transport = new PeerServerTransport();
+    const host = createSyncServer({
+      world: serverWorld,
       transport,
       clock: clock(),
       registry,
@@ -498,7 +498,7 @@ describe("sync runtime", () => {
     applySnapshot(clientWorld, transport.sent[1]!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(100);
 
-    hostWorld.get(player, PlayerState)!.hp.value = 90;
+    serverWorld.get(player, PlayerState)!.hp.value = 90;
     host.update();
     const update = transport.sent.at(-1)!;
     expect(update.peer).toBe(peerA);
@@ -520,15 +520,15 @@ describe("sync runtime", () => {
     });
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
-    const hostWorld = createTestHostWorld(testProtocol(Player));
+    const serverWorld = createTestServerWorld(testProtocol(Player));
     const visibleClient = createTestClientWorld(testProtocol(Player));
     const hiddenClient = createTestClientWorld(testProtocol(Player));
-    const player = hostWorld.spawn(Player);
+    const player = serverWorld.spawn(Player);
     const peerA = "peer-a";
     const peerB = "peer-b";
-    const transport = new PeerHostTransport();
-    const host = createSyncHost({
-      world: hostWorld,
+    const transport = new PeerServerTransport();
+    const host = createSyncServer({
+      world: serverWorld,
       transport,
       clock: clock(),
       registry,
@@ -559,14 +559,14 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const hostWorld = createTestHostWorld(protocol);
+    const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
-    const player = hostWorld.spawn(Player);
+    const player = serverWorld.spawn(Player);
     const peer = "peer";
     const visible = new Map<number, boolean>();
-    const transport = new PeerHostTransport();
-    const host = createSyncHost({
-      world: hostWorld,
+    const transport = new PeerServerTransport();
+    const host = createSyncServer({
+      world: serverWorld,
       transport,
       clock: clock(),
       registry,
@@ -587,7 +587,7 @@ describe("sync runtime", () => {
     applySnapshot(clientWorld, transport.sent.at(-1)!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(100);
 
-    hostWorld.remove(player, PlayerState);
+    serverWorld.remove(player, PlayerState);
     host.sendFullSnapshot(peer);
     applySnapshot(clientWorld, transport.sent.at(-1)!.bytes, registry);
     expect(clientWorld.get(player, PlayerState)).toBeUndefined();
@@ -599,11 +599,11 @@ describe("sync runtime", () => {
     });
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
-    const world = createTestHostWorld(testProtocol(Player));
+    const world = createTestServerWorld(testProtocol(Player));
     const existing = world.spawn(Player);
-    const transport = new PeerHostTransport();
+    const transport = new PeerServerTransport();
     const peer = "peer";
-    const host = createSyncHost({ world, transport, clock: clock(), registry });
+    const host = createSyncServer({ world, transport, clock: clock(), registry });
     host.update();
 
     transport.receive(peer, "reliable", encodeControl(ControlType.Hello, 1));
@@ -615,19 +615,19 @@ describe("sync runtime", () => {
     expect(transport.sent.map((packet) => packet.channel)).toEqual(["reliable", "unreliable"]);
   });
 
-  it("uses batched snapshot updates only when the host runtime opts in", () => {
+  it("uses batched snapshot updates only when the server runtime opts in", () => {
     const Player = defineEntity("RuntimeBatchedSnapshotPlayer", {
       hp: u16(100),
     });
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const world = createTestHostWorld(protocol);
+    const world = createTestServerWorld(protocol);
     const first = world.spawn(Player);
     const second = world.spawn(Player);
-    const transport = new PeerHostTransport();
+    const transport = new PeerServerTransport();
     const peer = "peer";
-    const host = createSyncHost({
+    const host = createSyncServer({
       world,
       transport,
       clock: clock(),
@@ -665,12 +665,12 @@ describe("sync runtime", () => {
     const PlayerState = Player.component;
     const registry = createRegistry().registerComponent(PlayerState);
     const protocol = testProtocol(Player);
-    const world = createTestHostWorld(protocol);
+    const world = createTestServerWorld(protocol);
     const first = world.spawn(Player);
     const second = world.spawn(Player);
-    const transport = new PeerHostTransport();
+    const transport = new PeerServerTransport();
     const peer = "peer";
-    const host = createSyncHost({
+    const host = createSyncServer({
       world,
       transport,
       clock: clock(),

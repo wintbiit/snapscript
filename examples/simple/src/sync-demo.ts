@@ -2,7 +2,7 @@ import {
   angle16,
   bool,
   createClientWorld,
-  createHostWorld,
+  createServerWorld,
   defineCommand,
   defineEntity,
   defineEvent,
@@ -14,7 +14,7 @@ import {
   type ClientTransport,
   type Clock,
   type ComponentInstanceOf,
-  type HostTransport,
+  type ServerTransport,
   type PeerRef,
   type ReadonlyComponentInstanceOf,
 } from "snapscript";
@@ -27,7 +27,7 @@ export const PlayerSchema = defineEntity("SimplePlayer", {
   yaw: angle16(0),
 });
 
-// Commands are client intent. The host owns validation and authoritative mutation.
+// Commands are client intent. The server owns validation and authoritative mutation.
 export const MoveCommand = defineCommand("MoveCommand", {
   dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
   dy: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
@@ -50,7 +50,7 @@ export const DamageEvent = defineEvent("DamageEvent", {
   amount: u16(0),
 });
 
-// The protocol is the only registry a world accepts. Host and client must construct worlds with the same object shape.
+// The protocol is the only registry a world accepts. Server and client must construct worlds with the same object shape.
 export const protocol = defineProtocol({
   prefabs: { Player: PlayerSchema },
   commands: { MoveCommand, DamageCommand, HealCommand, RotateCommand },
@@ -110,7 +110,7 @@ class BrowserClock implements Clock {
   }
 }
 
-class WebSocketTransport implements ClientTransport, HostTransport {
+class WebSocketTransport implements ClientTransport, ServerTransport {
   readonly #peer: PeerRef = "relay";
   #socket?: WebSocket;
   #clientHandler?: (channel: ChannelName, bytes: Uint8Array) => void;
@@ -217,21 +217,21 @@ class WebSocketTransport implements ClientTransport, HostTransport {
   }
 }
 
-export class HostPeer {
+export class ServerPeer {
   readonly clock = new BrowserClock();
   readonly #transport = new WebSocketTransport();
-  readonly world = createHostWorld({
+  readonly world = createServerWorld({
     protocol,
     transport: this.#transport,
     clock: this.clock,
   });
-  // Host code owns entity creation and mutable NetRefs.
+  // Server code owns entity creation and mutable NetRefs.
   readonly player = this.world.spawn(PlayerSchema);
   #lastEvent: string | undefined;
 
   constructor() {
     this.world.on(MoveCommand, (ctx) => {
-      // Command handlers mutate host-side NetRefs; dirty snapshots are produced during world.tick().
+      // Command handlers mutate server-side NetRefs; dirty snapshots are produced during world.tick().
       const payload = ctx.payload;
       const player = this.playerState();
       player.x.value += payload.dx;
