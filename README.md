@@ -212,6 +212,36 @@ The role is not a later mode switch. Internally, server and client worlds use se
 
 World handles are frozen runtime objects. Keep non-replicated server application state in your own objects.
 
+## WorldEntity
+
+`WorldEntity` is the reserved replicated world-level entity:
+
+```ts
+import { WorldEntity } from "snapscript";
+
+const MatchState = defineComponent("MatchState", {
+  phase: u8(0),
+  timeLeftMs: u32(0),
+});
+
+serverWorld.add(WorldEntity, MatchState, {
+  phase: 1,
+  timeLeftMs: 300000,
+});
+
+const state = clientWorld.get(WorldEntity, MatchState);
+```
+
+It has `id === 0`, is created automatically by the framework inside every server/client world, is
+always server-owned, and is always visible. User code never spawns or constructs the world entity.
+Use it for replicated global gameplay state such as match phase, round timer, team score, world
+clock, or global match config. Do not use it for logger/cache/db/engine bridge objects; those belong
+to the platform layer.
+
+`WorldEntity` uses the same component, dirty tracking, snapshot, query, and `each()` paths as normal
+entities. `destroy(WorldEntity)` is forbidden, while server-side `remove(WorldEntity, Component)` is
+allowed to clear a world-level component.
+
 ## ECS API
 
 The public ECS surface is intentionally small:

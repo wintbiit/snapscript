@@ -1,4 +1,4 @@
-export { createClientWorld, createServerWorld } from "./world";
+export { createClientWorld, createServerWorld, WorldEntity } from "./world";
 export type {
   ClientWorld,
   ClientWorldOptions,

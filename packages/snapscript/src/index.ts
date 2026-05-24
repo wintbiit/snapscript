@@ -34,6 +34,7 @@ export type {
 export {
   createClientWorld,
   createServerWorld,
+  WorldEntity,
 } from "./world/index";
 export type {
   ClientWorld,

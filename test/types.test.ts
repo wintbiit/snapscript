@@ -1,6 +1,7 @@
 import {
   createClientWorld,
   createServerWorld,
+  WorldEntity,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -104,10 +105,16 @@ componentOrPrefab.name.toString();
 componentQuery[0].name.toString();
 const host = createServerWorld({ protocol, transport: serverTransport, clock });
 const client = createClientWorld({ protocol, transport, clock });
+const worldEntityId: number = WorldEntity.id;
 const typedServer: ServerWorld = host;
 typedServer.tick();
 const hostReader: ReplicatedStateReader = host;
 const clientReader: ReplicatedStateReader = client;
+host.add(WorldEntity, Position);
+host.get(WorldEntity, Position)!.x.value = 1;
+host.has(WorldEntity, Position).valueOf();
+host.remove(WorldEntity, Position);
+client.get(WorldEntity, Position)?.x.value.toFixed();
 hostReader.each(componentQuery, (_entity, position, velocity) => {
   position.x.value.toFixed();
   velocity.x.value.toFixed();

@@ -8,9 +8,11 @@ import {
   defineEvent,
   defineProtocol,
   qf32,
+  ServerPeerId,
   u16,
   varu32,
   vec2q,
+  WorldEntity,
   type ChannelName,
   type ClientTransport,
   type Clock,
@@ -414,21 +416,21 @@ describe("single world sync api", () => {
     expect(() => client.get({ id: "1" } as never, Position)).toThrow(
       /requires an entity id or entity ref/,
     );
-    expect(() => host.remove({ id: 0 } as never, Position)).toThrow(
-      /requires a positive integer entity id/,
+    expect(() => host.remove({ id: -1 } as never, Position)).toThrow(
+      /requires a non-negative integer entity id/,
     );
     expect(() => host.destroy(Number.NaN as never)).toThrow(
-      /requires a positive integer entity id/,
+      /requires a non-negative integer entity id/,
     );
     expect(() => host.setVisible(1, { id: 1.5 } as never, true)).toThrow(
-      /requires a positive integer entity id/,
+      /requires a non-negative integer entity id/,
     );
     expect(() => host.setVisible(1, entity, "yes" as never)).toThrow(
       /visible must be a boolean/,
     );
     expect(() => host.setVisible(null as never, entity, true)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.clearVisible(1, -1 as never)).toThrow(
-      /requires a positive integer entity id/,
+      /requires a non-negative integer entity id/,
     );
     expect(() => host.clearVisible(undefined as never)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.isVisible(1, {} as never)).toThrow(
@@ -461,6 +463,68 @@ describe("single world sync api", () => {
     expect(host.ownerOf(first)).toBe(0);
     expect(host.ownedBy(1).map((entity) => entity.id)).toEqual([second.id]);
     expect(() => host.setOwner(first, -1 as never)).toThrow(/requires a non-negative integer peer id/);
+  });
+
+  it("uses WorldEntity for replicated world-level components", () => {
+    const MatchState = defineComponent("WorldEntityMatchState", {
+      phase: u16(0),
+    });
+    const protocol = defineProtocol({ components: { MatchState } });
+    const [serverTransport] = pair();
+    const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
+
+    expect(WorldEntity.id).toBe(0);
+    expect(host.spawn().id).toBe(1);
+    expect(host.ownerOf(WorldEntity)).toBe(ServerPeerId);
+    expect(host.isOwner(ServerPeerId, WorldEntity)).toBe(true);
+    expect(host.ownedBy(ServerPeerId).map((entity) => entity.id)).toContain(WorldEntity.id);
+
+    const state = host.add(WorldEntity, MatchState, { phase: 1 });
+    expect(state.phase.value).toBe(1);
+    expect(host.add(WorldEntity, MatchState)).toBe(state);
+    expect(host.get(WorldEntity, MatchState)).toBe(state);
+    expect(host.has(WorldEntity, MatchState)).toBe(true);
+    expect(host.query(MatchState).toArray().map(([entity]) => entity.id)).toEqual([WorldEntity.id]);
+
+    const seen: number[] = [];
+    host.each([MatchState] as const, (entity, match) => {
+      seen.push(entity.id);
+      match.phase.value = 2;
+    });
+    expect(seen).toEqual([WorldEntity.id]);
+    expect(state.phase.value).toBe(2);
+
+    expect(host.remove(WorldEntity, MatchState)).toBe(true);
+    expect(host.get(WorldEntity, MatchState)).toBeUndefined();
+    expect(() => host.destroy(WorldEntity)).toThrow(/cannot destroy WorldEntity/);
+  });
+
+  it("keeps WorldEntity server-owned and always visible", () => {
+    const MatchState = defineComponent("WorldEntityVisibleState", {
+      phase: u16(0),
+    });
+    const protocol = defineProtocol({ components: { MatchState } });
+    const [serverTransport] = pair();
+    let inspected = false;
+    const host = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+      visibility: "none",
+      interest() {
+        inspected = true;
+        return false;
+      },
+    });
+    host.add(WorldEntity, MatchState);
+
+    expect(host.isVisible(1, WorldEntity)).toBe(true);
+    expect(inspected).toBe(false);
+    expect(() => host.setOwner(WorldEntity, 1)).toThrow(/cannot change WorldEntity ownership/);
+    expect(() => host.setVisible(1, WorldEntity, false)).toThrow(/cannot hide WorldEntity/);
+    expect(() => host.setVisible(1, WorldEntity, true)).not.toThrow();
+    expect(() => host.clearOwner(WorldEntity)).not.toThrow();
+    expect(host.ownerOf(WorldEntity)).toBe(ServerPeerId);
   });
 
   it("passes read-only entity refs into interest hooks", () => {

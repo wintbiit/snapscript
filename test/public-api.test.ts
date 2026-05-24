@@ -4,6 +4,7 @@ import * as SnapScript from "../packages/snapscript/src/index";
 
 const expectedValueExports = [
   "ServerPeerId",
+  "WorldEntity",
   "angle12",
   "angle16",
   "angle8",

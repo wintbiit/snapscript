@@ -161,6 +161,47 @@ Systems are code because systems express behavior, ordering, and dependencies. P
 IDL would make the protocol file responsible for runtime composition and would blur the framework
 boundary.
 
+## World-Level Gameplay State
+
+Use `WorldEntity` for replicated world-level gameplay state. It is a reserved entity with
+`WorldEntity.id === 0`, is created automatically by the framework inside every server/client world,
+is server-owned, and is always visible. User code never spawns or constructs it.
+
+Example protocol:
+
+```snap
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+```
+
+Server logic:
+
+```ts
+import { WorldEntity } from "snapscript";
+import { MatchState } from "../generated/snapscript/protocol";
+
+serverWorld.add(WorldEntity, MatchState, {
+  phase: 1,
+  timeLeftMs: 300000,
+});
+```
+
+Client logic:
+
+```ts
+import { WorldEntity } from "snapscript";
+import { MatchState } from "../generated/snapscript/protocol";
+
+const state = clientWorld.get(WorldEntity, MatchState);
+```
+
+This is the SnapScript equivalent of replicated global gameplay state. It should be used for match
+phase, timers, team scores, world clock, and global match config. It should not be used for
+logger/cache/db/engine bridge objects; those belong to the platform/app layer. Do not introduce a
+public `Resource` concept in v1.
+
 ## RPC Logic
 
 RPC should be generated as typed wiring plus user-owned logic stubs.
@@ -585,6 +626,8 @@ Confirmed defaults:
 - source schema: root `game.snap`
 - no generated lock file
 - declaration order and field order are generated id sources
+- world-level replicated gameplay state uses `WorldEntity`
+- no public `Resource` in v1
 - generated runtime code: `src/generated/snapscript/`
 - user RPC logic: `src/rpc/server/` and `src/rpc/client/`
 - user systems: `src/systems/server/` and `src/systems/client/`

@@ -17,7 +17,7 @@ import {
   peekMessageType,
 } from "../sync/index";
 import type { SnapshotWriteOps } from "../sync/index";
-import type { ClientWorld, ServerWorld, SnapshotContext } from "../world/index";
+import { WorldEntity, type ClientWorld, type ServerWorld, type SnapshotContext } from "../world/index";
 import type { DirtyOps } from "../world/dirty-graph";
 import { worldInternals } from "../world/internals";
 
@@ -530,6 +530,9 @@ function isVisible(
   entityId: number,
   visibility: SyncServerOptions["isVisible"],
 ): boolean {
+  if (entityId === WorldEntity.id) {
+    return true;
+  }
   return visibility?.(peerId, entityId) ?? true;
 }
 

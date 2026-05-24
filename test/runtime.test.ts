@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   defineCommand,
+  defineComponent,
   defineEntity,
   defineEvent,
   qf32,
@@ -13,6 +14,7 @@ import {
   type Logger,
   type ServerTransport,
   ServerPeerId,
+  WorldEntity,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
 import { createSyncClient, createSyncServer } from "../packages/snapscript/src/runtime/index";
@@ -305,6 +307,41 @@ describe("sync runtime", () => {
     host.update();
     expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
     expect(clientWorld.get(player.id, PlayerState)).toBeUndefined();
+  });
+
+  it("syncs WorldEntity components through full and dirty snapshots", () => {
+    const MatchState = defineComponent("RuntimeWorldEntityMatchState", {
+      phase: u16(0),
+    });
+    const registry = createRegistry().registerComponent(MatchState);
+    const protocol = testProtocol(MatchState);
+    const serverWorld = createTestServerWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+    });
+
+    const serverState = serverWorld.add(WorldEntity, MatchState, { phase: 1 });
+    client.start();
+
+    expect(client.peerId()).toBe(1);
+    expect(clientWorld.ownerOf(WorldEntity)).toBe(ServerPeerId);
+    expect(clientWorld.get(WorldEntity, MatchState)?.phase.value).toBe(1);
+
+    serverState.phase.value = 2;
+    host.update();
+    expect(clientWorld.get(WorldEntity, MatchState)?.phase.value).toBe(2);
+    expect(worldInternals(clientWorld).getDirtyMask(WorldEntity.id)).toBe(0);
+
+    serverWorld.remove(WorldEntity, MatchState);
+    host.update();
+    expect(clientWorld.get(WorldEntity, MatchState)).toBeUndefined();
+    expect(clientWorld.ownerOf(WorldEntity)).toBe(ServerPeerId);
   });
 
   it("isolates host command handler failures", () => {

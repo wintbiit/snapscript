@@ -118,6 +118,9 @@ export interface EntityRef extends ReadonlyEntityRef {
   readonly [entityRefBrand]: "server";
 }
 
+/** Reserved world-level entity used for replicated global gameplay state. */
+export const WorldEntity = Object.freeze({ id: 0 }) as EntityRef;
+
 /** Ordered system phase run by `world.tick()`. */
 export type SystemPhase = "preUpdate" | "update" | "postUpdate" | "network";
 
@@ -454,6 +457,9 @@ class WorldCore implements QueryWorldAccess {
     for (const prefab of Object.values(protocol.prefabs)) {
       this.#protocolPrefabs.add(prefab);
     }
+    this.#storage.addEntity(WorldEntity.id);
+    this.#entityRefs.set(WorldEntity.id, WorldEntity);
+    this.#readonlyEntityRefs.set(WorldEntity.id, WorldEntity);
   }
 
   entity(): EntityRef {
@@ -716,6 +722,9 @@ class WorldCore implements QueryWorldAccess {
 
   destroy(entity: number | EntityRef): boolean {
     const entityId = entityIdFrom(entity, "world.destroy()");
+    if (entityId === WorldEntity.id) {
+      throw new Error("world.destroy() cannot destroy WorldEntity");
+    }
     if (!this.#storage.deleteEntity(entityId)) {
       return false;
     }
@@ -736,11 +745,18 @@ class WorldCore implements QueryWorldAccess {
     const entityId = entityIdFrom(entity, "world.setOwner()");
     this.#assertEntityExists(entityId, "world.setOwner()");
     assertPeerId(peerId, "world.setOwner()");
+    if (entityId === WorldEntity.id) {
+      throw new Error("world.setOwner() cannot change WorldEntity ownership");
+    }
     this.#setOwnerInternal(entityId, peerId);
     this.dirty.markNetworkChanged(entityId);
   }
 
   clearOwner(entity: number | EntityRef): void {
+    const entityId = entityIdFrom(entity, "world.clearOwner()");
+    if (entityId === WorldEntity.id) {
+      return;
+    }
     this.setOwner(entity, ServerPeerId);
   }
 
@@ -1048,6 +1064,9 @@ class WorldCore implements QueryWorldAccess {
 
   _applyDestroyFromRemote(entityId: number, _schemaId?: number): void {
     assertEntityId(entityId, "remote snapshot");
+    if (entityId === WorldEntity.id) {
+      throw new Error("remote snapshot cannot destroy WorldEntity");
+    }
     this.#storage.deleteEntity(entityId);
     this.#entityRefs.delete(entityId);
     this.#readonlyEntityRefs.delete(entityId);
@@ -1811,6 +1830,12 @@ class ServerWorldImpl implements ServerWorld {
     if (typeof visible !== "boolean") {
       throw new Error("ServerWorld.setVisible() visible must be a boolean");
     }
+    if (entityId === WorldEntity.id) {
+      if (!visible) {
+        throw new Error("ServerWorld.setVisible() cannot hide WorldEntity");
+      }
+      return;
+    }
     const map = this.#visibility.get(peerId) ?? new Map<number, boolean>();
     map.set(entityId, visible);
     this.#visibility.set(peerId, map);
@@ -1824,6 +1849,9 @@ class ServerWorldImpl implements ServerWorld {
     }
 
     const entityId = entityIdFrom(entity, "ServerWorld.clearVisible()");
+    if (entityId === WorldEntity.id) {
+      return;
+    }
     const map = this.#visibility.get(peerId);
     if (map === undefined) {
       return;
@@ -1837,6 +1865,9 @@ class ServerWorldImpl implements ServerWorld {
   isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
     assertPeerId(peerId, "ServerWorld.isVisible()");
     const entityId = entityIdFrom(entity, "ServerWorld.isVisible()");
+    if (entityId === WorldEntity.id) {
+      return true;
+    }
     const override = this.#visibility.get(peerId)?.get(entityId);
     if (override !== undefined) {
       return override;
@@ -2406,8 +2437,8 @@ function entityIdFrom(entity: number | ReadonlyEntityRef, label: string): number
 }
 
 function assertEntityId(entityId: number, label: string): void {
-  if (!Number.isSafeInteger(entityId) || entityId < 1) {
-    throw new Error(`${label} requires a positive integer entity id`);
+  if (!Number.isSafeInteger(entityId) || entityId < 0) {
+    throw new Error(`${label} requires a non-negative integer entity id`);
   }
 }
 
