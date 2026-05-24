@@ -62,6 +62,9 @@ my-project/
       client.ts
     transport/
       README.md
+    systems/
+      index.ts
+      movement.system.ts
 ```
 
 This layout uses SnapScript vocabulary rather than Go-style `internal/handler/logic/svc`. The user
@@ -121,6 +124,18 @@ boundary.
 ## RPC Logic
 
 RPC should be generated as typed wiring plus user-owned logic stubs.
+
+`ctx` in RPC logic means the per-message RPC context. It is not a service context, dependency
+container, or project runtime object. It contains only data that belongs to the current RPC packet:
+
+- `ctx.payload`: decoded command/event payload
+- `ctx.sender`: SnapScript peer id of the sender
+- `ctx.tick`: sender tick encoded on the packet
+- `ctx.rpc`: the RPC definition
+- `ctx.channel`: logical channel used by the packet
+
+The `world` argument is the stable object that gives logic access to replicated state and world APIs.
+The `ctx` argument is ephemeral and should not be stored.
 
 Example generated file:
 
@@ -199,45 +214,119 @@ Current leaning: do not generate service context by default. Keep the default lo
 
 Systems should be user code, not `.snap` definitions.
 
-Recommended style:
+Recommended shape:
 
 ```txt
 src/
   systems/
+    index.ts
     movement.system.ts
     health.system.ts
+    client-view.system.ts
 ```
 
-Example:
+Each feature module exports a registration function. The registration function is the boundary:
+it is where the user names the system, selects the phase, and keeps ordering visible.
+
+Host example:
 
 ```ts
 // src/systems/movement.system.ts
 
+import type { HostWorld } from "snapscript";
+import { Position, Velocity } from "../protocol/generated/protocol";
+
 export function registerMovementSystems(world: HostWorld): void {
-  world.system("movement.integrate", "update", (world) => {
+  world.system("movement.integrate", "update", (world, frame) => {
+    const dt = frame.dtMs / 1000;
     world.each([Position, Velocity] as const, (_entity, position, velocity) => {
-      position.x.value += velocity.x.value;
-      position.y.value += velocity.y.value;
+      position.x.value += velocity.x.value * dt;
+      position.y.value += velocity.y.value * dt;
     });
   });
 }
 ```
 
-Composition should be explicit:
+Client example:
+
+```ts
+// src/systems/client-view.system.ts
+
+import type { ClientWorld } from "snapscript";
+import { Position } from "../protocol/generated/protocol";
+
+export function registerClientViewSystems(
+  world: ClientWorld,
+  pushView: (view: readonly { readonly id: number; readonly x: number; readonly y: number }[]) => void,
+): void {
+  world.system("view.collect", "postUpdate", (world) => {
+    const views: { id: number; x: number; y: number }[] = [];
+    world.each([Position] as const, (entity, position) => {
+      views.push({ id: entity.id, x: position.x.value, y: position.y.value });
+    });
+    pushView(views);
+  });
+}
+```
+
+Composition should go through a small index file:
+
+```ts
+// src/systems/index.ts
+
+import type { ClientWorld, HostWorld } from "snapscript";
+import { registerClientViewSystems } from "./client-view.system";
+import { registerHealthSystems } from "./health.system";
+import { registerMovementSystems } from "./movement.system";
+
+export function registerHostSystems(world: HostWorld): void {
+  registerMovementSystems(world);
+  registerHealthSystems(world);
+}
+
+export function registerClientSystems(
+  world: ClientWorld,
+  hooks: {
+    readonly pushView: (view: readonly { readonly id: number; readonly x: number; readonly y: number }[]) => void;
+  },
+): void {
+  registerClientViewSystems(world, hooks.pushView);
+}
+```
+
+Host bootstrap remains explicit:
 
 ```ts
 export function createHostRuntime(options: HostRuntimeOptions): HostWorld {
   const world = createHostWorld(options);
   registerHostRpc(world);
-  registerMovementSystems(world);
-  registerHealthSystems(world);
+  registerHostSystems(world);
   return world;
 }
 ```
 
-This keeps system ordering visible in code. If the project grows, users can make their own
-`registerSystems(world)` module. The CLI can scaffold examples, but should not regenerate system
-files from `.snap`.
+This keeps system ordering visible in code without inventing a scheduler configuration DSL.
+
+System naming convention:
+
+- use dot-separated feature/action names
+- prefer imperative or pipeline names: `movement.integrate`, `health.death-check`, `view.collect`
+- keep names stable because they appear in diagnostics and logs
+
+Recommended phase usage:
+
+- `preUpdate`: consume queued inputs or prepare temporary frame state
+- `update`: mutate authoritative host state or run core simulation
+- `postUpdate`: derive read models, emit side effects, cleanup
+- `network`: advanced host-side hook before runtime sends snapshots; avoid by default
+
+System dependencies should be ordinary function parameters, not a generated service context. Passing
+small explicit hooks such as `pushView` is clearer than creating a generic context object. If a
+project grows enough to need a context, the user can make one in `src/systems/index.ts` and pass it
+through their registration functions.
+
+The CLI can scaffold `src/systems/index.ts` and one example system on project creation. It should not
+regenerate system files from `.snap`.
 
 Open questions:
 
@@ -245,8 +334,14 @@ Open questions:
 - Should systems be named with a reverse namespace style such as `movement.integrate`?
 - Should system registration helpers live under `src/systems/` or `src/world/systems/`?
 
-Current leaning: generate an empty `src/systems/index.ts` only on project creation, not during
-protocol generation.
+Current decisions:
+
+- generate `src/systems/index.ts` on project creation only
+- do not overwrite `src/systems/**`
+- use `registerHostSystems(world)` and `registerClientSystems(world, hooks)` as the public system
+  composition functions
+- keep systems under `src/systems/`, not under `src/world/`
+- keep system definitions out of `.snap`
 
 ## Host And Client Bootstrap
 
@@ -269,7 +364,7 @@ export function createProjectHostWorld(options: {
     logger: options.logger,
   });
   registerHostRpc(world);
-  registerSystems(world);
+  registerHostSystems(world);
   return world;
 }
 ```
@@ -291,6 +386,9 @@ export function createProjectClientWorld(options: {
     logger: options.logger,
   });
   registerClientRpc(world);
+  registerClientSystems(world, {
+    pushView: options.pushView,
+  });
   return world;
 }
 ```
