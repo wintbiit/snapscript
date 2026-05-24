@@ -352,19 +352,35 @@ function writeBatchUpdateOp(
   internals: ReturnType<typeof worldInternals>,
   group: BatchUpdateGroup,
 ): void {
+  if (group.fieldMask === 0) {
+    throw new Error(`Cannot encode batch update for component ${group.componentId} with empty field mask`);
+  }
+
   writer.writeVarUint(0);
   writer.writeVarUint(group.componentId);
   writer.writeU8(SnapshotOp.BatchUpdateComponent);
   writer.writeVarUint(group.fieldMask);
   writer.writeVarUint(group.updates.length);
 
-  for (const { entityId, componentId, fieldMask } of group.updates) {
-    const record = internals.getRecord(entityId, componentId);
-    if (record === undefined || fieldMask === 0) {
-      throw new Error(`Cannot encode update for missing component ${componentId} on entity ${entityId}`);
+  const firstUpdate = group.updates[0]!;
+  const firstRecord = internals.getRecord(firstUpdate.entityId, group.componentId);
+  if (firstRecord === undefined) {
+    throw new Error(
+      `Cannot encode update for missing component ${group.componentId} on entity ${firstUpdate.entityId}`,
+    );
+  }
+  const codec = codecForSchema(firstRecord.schema);
+  writer.writeVarUint(firstUpdate.entityId);
+  codec.writeDelta(writer, firstRecord.instance, group.fieldMask);
+
+  for (let index = 1; index < group.updates.length; index += 1) {
+    const { entityId } = group.updates[index]!;
+    const record = internals.getRecord(entityId, group.componentId);
+    if (record === undefined) {
+      throw new Error(`Cannot encode update for missing component ${group.componentId} on entity ${entityId}`);
     }
     writer.writeVarUint(entityId);
-    codecForSchema(record.schema).writeDelta(writer, record.instance, fieldMask);
+    codec.writeDelta(writer, record.instance, group.fieldMask);
   }
 }
 

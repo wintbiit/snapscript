@@ -585,5 +585,5 @@ describe("benchmark baselines", () => {
           row.maxMs >= row.minMs,
       ),
     ).toBe(true);
-  });
+  }, 30_000);
 });

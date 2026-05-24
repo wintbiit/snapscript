@@ -12,7 +12,10 @@
     "declarationMap": true,
     "sourceMap": true,
     "isolatedModules": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "snapscript": ["./src/index.ts"]
+    }
   },
   "include": ["src", "test", "tsdown.config.ts", "vitest.config.ts"]
 }
