@@ -23,6 +23,7 @@
     "example:ecs:dev": "pnpm --dir examples/ecs dev",
     "example:simple:build": "pnpm --dir examples/simple build",
     "example:simple:dev": "pnpm --dir examples/simple dev",
+    "test:examples": "pnpm example:simple:build && pnpm example:ecs:build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

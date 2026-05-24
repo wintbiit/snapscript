@@ -142,6 +142,10 @@ Open `/host` and `/client` in separate browser tabs. The examples show the inten
 - host command handlers mutate authoritative `NetRef.value`
 - clients observe read-only replicated component state
 
+The examples are also performance fixtures. Changes to query loops, dirty encoding, fanout, or
+snapshot apply should be checked against `test/benchmark-examples.test.ts`, not only isolated
+microbenchmarks.
+
 ## Design Boundary
 
 SnapScript owns:
@@ -231,6 +235,21 @@ const MovementQuery = [Position, Velocity] as const satisfies ComponentQuery;
 hostWorld.each(MovementQuery, (_entity, position, velocity) => {
   position.x.value += velocity.x.value;
 });
+```
+
+For shared render or inspection code, accept `ReplicatedStateReader` instead of `HostWorld` or
+`ClientWorld`. That keeps helper functions read-only and usable on both sides:
+
+```ts
+import type { ReplicatedStateReader } from "snapscript";
+
+function readViews(world: ReplicatedStateReader) {
+  const views: { id: number; x: number; y: number }[] = [];
+  world.each([Position] as const, (entity, position) => {
+    views.push({ id: entity.id, x: position.x.value, y: position.y.value });
+  });
+  return views;
+}
 ```
 
 Object-valued fields such as `vec2q()` and `vec3q()` use immutable value snapshots. Replace the whole object:
@@ -329,6 +348,9 @@ const hostWorld = createHostWorld({
 
 The default is `snapshotEncoding: "default"`. Batched snapshots reduce repeated per-entity update headers for homogeneous dirty updates. When enabled, the host still sends batched update packets only to peers that advertise batched snapshot support in SnapScript control messages; older peers automatically receive the default update format.
 
+Keep this option data-driven. It can reduce bandwidth for homogeneous dirty frames, but the default
+path stays the CPU-stable baseline until the example-derived benchmark proves a broad win.
+
 ## Visibility And Interest
 
 Default visibility is all-visible:
@@ -398,7 +420,7 @@ Run benchmarks with:
 pnpm bench
 ```
 
-The benchmark reports median/min/max wall-clock time across 9 samples. The current benchmark covers:
+The benchmark reports median/min/max wall-clock time across repeated samples. The current benchmark covers:
 
 - query and `each()` loops
 - dirty snapshot encode
@@ -407,6 +429,21 @@ The benchmark reports median/min/max wall-clock time across 9 samples. The curre
 - component add/remove churn
 - fanout across peers
 - map storage vs sparse-set vs sparse-set plus archetype index
+- real example-derived host send, movement, render read, and client apply loops
+
+Use this rule for architecture work: example-derived benchmark results are the merge gate. Synthetic
+microbenchmarks are useful for finding mechanisms, but they are not enough to justify a storage or
+wire-format change by themselves.
+
+Hot-path guidance for users:
+
+- keep reusable query tuples as `const ... satisfies ComponentQuery`
+- use `world.each(QueryTuple, fn)` for systems, render sampling, and other high-frequency loops
+- use `query()` when you need a lazy result object, length checks, mapping, or easy debugging
+- pass `ReplicatedStateReader` to shared read-only helpers
+- leave `snapshotEncoding` at `"default"` unless your measured workload benefits from `"batched"`
+- prefer `visibility: "all"` when all entities are visible; peer-specific interest disables the
+  simplest all-peer fanout reuse path
 
 Representative local run on 2026-05-23:
 
@@ -446,8 +483,6 @@ pnpm test
 pnpm bench
 pnpm build
 pnpm test:examples
-pnpm example:simple:build
-pnpm example:ecs:build
 ```
 
 After `pnpm build`, audit the generated public declaration surface if you touch exports:
@@ -460,4 +495,5 @@ The command should not find those internal names.
 
 ## License
 
-SnapScript is licensed under the GNU General Public License version 3. See [LICENSE](./LICENSE).
+SnapScript is licensed under the GNU General Public License version 3. See [LICENSE](./LICENSE) for
+the full license text.

@@ -320,42 +320,83 @@ class QueryResultImpl<
   }
 }
 
-/** Options for constructing an authoritative host world. */
+/**
+ * Options for constructing an authoritative host world.
+ *
+ * A host world owns simulation truth, mutable replicated state, command handlers, and outbound
+ * snapshots. There is no local-only world mode; choose host or client when the world is created.
+ */
 export interface HostWorldOptions {
+  /** Protocol returned by `defineProtocol()`. Hand-written protocol-like objects are rejected. */
   readonly protocol: ProtocolDefinition;
+  /** Host transport adapter. Reliability and ordering are provided by the host/engine layer. */
   readonly transport: HostTransport;
+  /** Monotonic frame clock used for system context and runtime tick ordering. */
   readonly clock: Clock;
+  /** Optional structured logger used for isolated handler/runtime errors. */
   readonly logger?: Logger;
+  /**
+   * Dirty snapshot wire format.
+   *
+   * `"default"` is the CPU-stable baseline. `"batched"` is opt-in and negotiated per client; it
+   * can reduce bytes for homogeneous dirty updates without changing the public ECS API.
+   */
   readonly snapshotEncoding?: "default" | "batched";
+  /** Default host visibility policy before manual overrides or `interest` are applied. */
   readonly visibility?: "all" | "none";
+  /**
+   * Optional host-owned interest hook.
+   *
+   * The hook receives read-only world inputs and must return a boolean. Use `visibility: "all"`
+   * when every entity should be visible to every peer.
+   */
   readonly interest?: (peer: PeerRef, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
 }
 
-/** Options for constructing a replicated client world. */
+/**
+ * Options for constructing a replicated client world.
+ *
+ * Client worlds are read-only views of replicated state. They run client systems, send commands,
+ * receive events, and apply snapshots produced by a host world.
+ */
 export interface ClientWorldOptions {
+  /** Protocol returned by `defineProtocol()`; it must match the host protocol. */
   readonly protocol: ProtocolDefinition;
+  /** Client transport adapter. Snapshot and RPC bytes are delivered as raw `Uint8Array` packets. */
   readonly transport: ClientTransport;
+  /** Monotonic frame clock used for system context and runtime tick ordering. */
   readonly clock: Clock;
+  /** Optional structured logger used for isolated handler/runtime errors. */
   readonly logger?: Logger;
 }
 
-/** Shared read-only replicated state view implemented by host worlds, client worlds, and interest hooks. */
+/**
+ * Shared read-only replicated state view.
+ *
+ * Use this type for renderers, inspectors, interpolation samplers, and helper functions that should
+ * work with either a host world or a client world without gaining mutation authority.
+ */
 export interface ReplicatedStateReader {
+  /** Reads a single component or a simple prefab primary component as read-only replicated state. */
   get<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
+  /** Reads every component in a composite prefab as read-only replicated state. */
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
     entity: number | ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): ReadonlyPrefabInstance<TComponents> | undefined;
+  /** Returns whether the entity currently has a component or every component in a prefab. */
   has(
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
+  /** Creates a lazy read-only query with `.length`, `.map()`, `.forEach()`, and `.toArray()`. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
   ): QueryResult<TComponents, ReadonlyEntityRef, "readonly">;
+  /** Iterates matching rows without materializing public query tuples; prefer this in hot paths. */
   each<const TComponents extends ComponentQuery>(
     components: TComponents,
     fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
