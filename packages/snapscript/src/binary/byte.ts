@@ -156,6 +156,16 @@ export class ByteReader implements BinaryReader {
     return value;
   }
 
+  readBytes(byteLength: number): Uint8Array {
+    if (!Number.isInteger(byteLength) || byteLength < 0) {
+      throw new RangeError(`ByteReader readBytes length must be a non-negative integer, got ${byteLength}`);
+    }
+    this.#require(byteLength);
+    const value = this.bytes.slice(this.#offset, this.#offset + byteLength);
+    this.#offset += byteLength;
+    return value;
+  }
+
   readVarU32(): number {
     return readVarU32FromBytes(this);
   }

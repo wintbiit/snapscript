@@ -16,7 +16,7 @@ For a new `.snap`-driven core package, use the npm create package:
 npm create snapscript@latest my-game-core
 ```
 
-The package is currently private in this repository. For local development, use the workspace scripts:
+For local development in this repository, use the workspace scripts:
 
 ```sh
 pnpm install
@@ -24,7 +24,37 @@ pnpm build
 pnpm test
 ```
 
-## Get Started
+## Get Started With `npm create`
+
+Use this path when you want SnapScript to own the protocol/RPC/system wiring and leave platform
+integration to your own browser, Node, Puerts, or engine project.
+
+```sh
+npm create snapscript@latest my-game-core
+cd my-game-core
+pnpm install
+pnpm generate
+pnpm test
+```
+
+The generated package is a platform-neutral game core. It contains:
+
+- `game.snap` for replicated components, entities, commands, and events
+- `src/generated/snapscript/` for generated protocol, manifest, hash, and typed RPC facade
+- `src/rpc/server` and `src/rpc/client` for user-owned RPC logic
+- `src/systems/server` and `src/systems/client` for user-owned systems
+- `src/transport/memory.ts` as a test-only transport
+
+To initialize from an existing schema without copying it:
+
+```sh
+npm create snapscript@latest my-game-core -- --schema ../game.snap
+```
+
+`snapscript generate <schema.snap> --out src/generated/snapscript` refreshes generated protocol,
+RPC registry, system registries, and missing RPC stubs. Existing user RPC logic is kept.
+
+## Get Started With The Runtime API
 
 Define replicated state with field helpers and component/entity schemas:
 
@@ -137,6 +167,7 @@ clientWorld.onSnapshot((world, snapshot) => {
 
 ```sh
 pnpm example:protocol:build
+pnpm --dir examples/protocol/node build
 pnpm example:simple:dev
 pnpm example:ecs:dev
 ```
@@ -144,6 +175,7 @@ pnpm example:ecs:dev
 Open `/server` and `/client` in separate browser tabs. The examples show the intended layering:
 
 - `examples/protocol` shows `.snap` check/generate, order-derived ids, generated protocol exports, and typed RPC helpers
+- `examples/protocol/node` shows a Node WebSocket platform adapter around the generated core package
 - server/client worlds are created directly by the server app
 - transports only deliver `Uint8Array` packets and channel labels
 - commands express client intent
@@ -168,6 +200,7 @@ SnapScript owns:
 - server/client world runtime
 - optional visibility filtering
 - `.snap` protocol generation tooling
+- generated protocol hash checks during early handshake
 - benchmark and protocol diagnostics
 
 SnapScript does not own:

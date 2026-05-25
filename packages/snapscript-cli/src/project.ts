@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Eta } from "eta";
-import { analyzeSnap, generateSnap, type GeneratedFile, type SnapModel, type SnapRpcModel } from "./idl/index";
+import { analyzeSnapFile, generateSnapFile, type GeneratedFile, type SnapModel, type SnapRpcModel } from "./idl/index";
 
 export type ReportStatus = "generated" | "created" | "kept" | "stale";
 
@@ -43,13 +43,12 @@ export function generateProject(options: GenerateProjectOptions): readonly Repor
   const schemaPath = isAbsolute(options.schemaPath) ? options.schemaPath : resolve(cwd, options.schemaPath);
   const outDir = options.outDir ?? "src/generated/snapscript";
   const outPath = isAbsolute(outDir) ? outDir : resolve(cwd, outDir);
-  const source = readFileSync(schemaPath, "utf8");
-  const model = analyzeSnap(source);
+  const model = analyzeSnapFile(schemaPath);
   const report: ReportItem[] = [];
 
   assertRpcFileNames(model);
 
-  for (const file of generateSnap(source, { inputPath: schemaPath, outDir: outPath })) {
+  for (const file of generateSnapFile({ inputPath: schemaPath, outDir: outPath })) {
     writeGenerated(file, report, cwd);
   }
 
@@ -235,6 +234,12 @@ export function registerClientRpc(world: ClientWorld): void {
 const commandStubTemplate = `import type { RpcCtx, ServerWorld } from "snapscript";
 import type { <%= it.rpc.payloadTypeName %> } from "../../generated/snapscript/protocol";
 
+/**
+ * Handles a client-to-server command.
+ *
+ * \`ctx.sender\` is the sending peer id. Validate authority, ownership, and payload limits before
+ * mutating authoritative state.
+ */
 export function <%= it.rpc.handlerName %>(world: ServerWorld, ctx: RpcCtx<<%= it.rpc.payloadTypeName %>>): void {
   void world;
   void ctx;
@@ -244,6 +249,12 @@ export function <%= it.rpc.handlerName %>(world: ServerWorld, ctx: RpcCtx<<%= it
 const eventStubTemplate = `import type { ClientWorld, RpcCtx } from "snapscript";
 import type { <%= it.rpc.payloadTypeName %> } from "../../generated/snapscript/protocol";
 
+/**
+ * Handles a server-to-client event.
+ *
+ * \`ctx.sender\` is the server peer id. Keep presentation feedback here; authoritative gameplay
+ * state should still come from replicated world data.
+ */
 export function <%= it.rpc.handlerName %>(world: ClientWorld, ctx: RpcCtx<<%= it.rpc.payloadTypeName %>>): void {
   void world;
   void ctx;

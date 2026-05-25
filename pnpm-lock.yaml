@@ -104,6 +104,31 @@ importers:
         specifier: ^4.0.8
         version: 4.1.7(@types/node@24.12.4)(vite@8.0.14(@types/node@24.12.4)(esbuild@0.27.7))
 
+  examples/protocol/node:
+    dependencies:
+      '@snapscript/example-protocol-core':
+        specifier: workspace:*
+        version: link:../core
+      snapscript:
+        specifier: workspace:*
+        version: link:../../../packages/snapscript
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.4
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.8
+        version: 4.1.7(@types/node@24.12.4)(vite@8.0.14(@types/node@24.12.4)(esbuild@0.27.7))
+
   examples/simple:
     dependencies:
       snapscript:

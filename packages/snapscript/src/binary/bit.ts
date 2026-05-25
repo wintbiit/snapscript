@@ -68,6 +68,11 @@ export class BitWriter implements BinaryWriter {
     this.#writer.writeF32(value);
   }
 
+  writeBytes(bytes: Uint8Array): void {
+    this.alignToByte();
+    this.#writer.writeBytes(bytes);
+  }
+
   writeVarUint(value: number): void {
     this.alignToByte();
     writeVarUint(this.#writer, value);
@@ -181,6 +186,11 @@ export class BitReader implements BinaryReader {
   readF32(): number {
     this.alignToByte();
     return this.#reader.readF32();
+  }
+
+  readBytes(byteLength: number): Uint8Array {
+    this.alignToByte();
+    return this.#reader.readBytes(byteLength);
   }
 
   readVarUint(): number {

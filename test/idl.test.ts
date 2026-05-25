@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkSnap, generateSnap } from "../packages/snapscript-cli/src/idl/index";
+import { checkSnap, generateSnap, generateSnapFile } from "../packages/snapscript-cli/src/idl/index";
 
 describe("snap idl", () => {
   it("checks and generates the example protocol", () => {
@@ -20,6 +22,7 @@ describe("snap idl", () => {
     expect(protocol).toContain("hidden: bool(false)");
     expect(protocol).toContain('defineCommand("Movement.Move"');
     expect(protocol).toContain('defineEvent("Movement.MoveDisabled"');
+    expect(protocol).toContain("export const protocolHash =");
     expect(protocol).toContain("sendTo(world: ServerWorld, peerId: PeerId");
     expect(manifest.components.Position!.fields).toEqual({ x: 0, y: 1, hidden: 2 });
     expect(manifest.commands["Movement.Move"]!.fields).toEqual({ dx: 0, dy: 1 });
@@ -27,6 +30,81 @@ describe("snap idl", () => {
     expect(manifest.events["Movement.MoveDisabled"]!.fields).toEqual({ disabled: 0 });
     expect(manifest.events["Movement.MoveDisabled"]!.id).toBe(2);
     expect(files.some((file) => file.path.endsWith("snapscript.lock.json"))).toBe(false);
+  });
+
+  it("generates imports, enums, strings, bytes, and arrays", () => {
+    const dir = mkdtempSync(join(tmpdir(), "snapscript-idl-"));
+    try {
+      writeFileSync(
+        join(dir, "common.snap"),
+        `syntax = "v1"
+enum Team { red blue }
+`,
+      );
+      writeFileSync(
+        join(dir, "game.snap"),
+        `syntax = "v1"
+import "./common.snap"
+component PlayerInfo {
+  name: string(default: "", maxBytes: 32)
+  blob: bytes(maxBytes: 16)
+  scores: array(u16(0), maxItems: 4)
+  team: Team(default: red)
+}
+`,
+      );
+
+      const files = generateSnapFile({ inputPath: join(dir, "game.snap") });
+      const protocol = files.find((file) => file.path.endsWith("protocol.ts"))?.content ?? "";
+      const manifest = JSON.parse(files.find((file) => file.path.endsWith("manifest.json"))!.content) as {
+        readonly enums: Record<string, { readonly values: readonly string[] }>;
+      };
+
+      expect(protocol).toContain('export const TeamValues = ["red","blue"] as const;');
+      expect(protocol).toContain('name: stringOf("", { maxBytes: 32 })');
+      expect(protocol).toContain("blob: bytesOf(new Uint8Array(), { maxBytes: 16 })");
+      expect(protocol).toContain("scores: arrayOf(u16(0), [], { maxItems: 4 })");
+      expect(protocol).toContain('team: enumOf(TeamValues, "red")');
+      expect(manifest.enums.Team!.values).toEqual(["red", "blue"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports duplicate and circular imports", () => {
+    const dir = mkdtempSync(join(tmpdir(), "snapscript-idl-"));
+    try {
+      writeFileSync(join(dir, "common.snap"), 'syntax = "v1"\ncomponent C { x: u8(0) }\n');
+      writeFileSync(
+        join(dir, "duplicate.snap"),
+        'syntax = "v1"\nimport "./common.snap"\nimport "./common.snap"\n',
+      );
+      writeFileSync(join(dir, "a.snap"), 'syntax = "v1"\nimport "./b.snap"\n');
+      writeFileSync(join(dir, "b.snap"), 'syntax = "v1"\nimport "./a.snap"\n');
+
+      expect(() => generateSnapFile({ inputPath: join(dir, "duplicate.snap") })).toThrow(/Duplicate .snap import/);
+      expect(() => generateSnapFile({ inputPath: join(dir, "a.snap") })).toThrow(/Circular .snap import/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("changes protocol hash when schema order changes", () => {
+    const first = generateSnap('syntax = "v1"\ncomponent A { x: u8(0) }\n', { inputPath: "a.snap" })
+      .find((file) => file.path.endsWith("protocol.ts"))!.content;
+    const second = generateSnap('syntax = "v1"\ncomponent A { y: u8(0) }\n', { inputPath: "a.snap" })
+      .find((file) => file.path.endsWith("protocol.ts"))!.content;
+
+    expect(first.match(/protocolHash = "([^"]+)"/)?.[1]).not.toBe(second.match(/protocolHash = "([^"]+)"/)?.[1]);
+  });
+
+  it("changes protocol hash when field type options change", () => {
+    const first = generateSnap('syntax = "v1"\ncomponent A { name: string(default: "", maxBytes: 8) }\n', { inputPath: "a.snap" })
+      .find((file) => file.path.endsWith("protocol.ts"))!.content;
+    const second = generateSnap('syntax = "v1"\ncomponent A { name: string(default: "", maxBytes: 16) }\n', { inputPath: "a.snap" })
+      .find((file) => file.path.endsWith("protocol.ts"))!.content;
+
+    expect(first.match(/protocolHash = "([^"]+)"/)?.[1]).not.toBe(second.match(/protocolHash = "([^"]+)"/)?.[1]);
   });
 
   it("derives ids from declaration and field order", () => {
@@ -58,9 +136,9 @@ component Stats {
       readonly components: Record<string, { readonly id: number; readonly fields: Record<string, number> }>;
     };
 
-    expect(firstManifest.components.Stats).toEqual({ id: 1, fields: { a: 0, b: 1 } });
-    expect(firstManifest.components.Other).toEqual({ id: 2, fields: { c: 0 } });
-    expect(reorderedManifest.components.Stats).toEqual({ id: 1, fields: { b: 0, a: 1, c: 2 } });
+    expect(firstManifest.components.Stats).toMatchObject({ id: 1, fields: { a: 0, b: 1 } });
+    expect(firstManifest.components.Other).toMatchObject({ id: 2, fields: { c: 0 } });
+    expect(reorderedManifest.components.Stats).toMatchObject({ id: 1, fields: { b: 0, a: 1, c: 2 } });
   });
 
   it("reports schema authoring errors clearly", () => {

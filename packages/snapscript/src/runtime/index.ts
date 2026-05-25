@@ -26,6 +26,7 @@ export interface SyncServerOptions {
   readonly transport: ServerTransport;
   readonly clock: Clock;
   readonly registry: RegistryLike;
+  readonly protocolHash?: string;
   readonly logger?: Logger;
   readonly sendRate?: number;
   readonly snapshotEncoding?: "default" | "batched";
@@ -38,6 +39,7 @@ export interface SyncClientOptions {
   readonly transport: ClientTransport;
   readonly clock: Clock;
   readonly registry: RegistryLike;
+  readonly protocolHash?: string;
   readonly logger?: Logger;
   readonly sendRate?: number;
   readonly onSnapshot?: (context: SnapshotContext) => void;
@@ -181,6 +183,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       const messageType = peekMessageType(bytes);
       if (messageType === MessageType.Control) {
         const control = decodeControl(bytes);
+        assertProtocolHashMatch("server", options.protocolHash, control.protocolHash);
         stateFor(peerStates, peer).capabilities = control.capabilities;
         if (
           control.type === ControlType.Hello ||
@@ -189,7 +192,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           options.transport.send(
             peer,
             "reliable",
-            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId),
+            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId, options.protocolHash),
           );
           sendFullSnapshot(peer);
         }
@@ -430,6 +433,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       const messageType = peekMessageType(bytes);
       if (messageType === MessageType.Control) {
         const control = decodeControl(bytes);
+        assertProtocolHashMatch("client", options.protocolHash, control.protocolHash);
         if (control.type === ControlType.PeerAssigned) {
           assignedPeerId = control.peerId ?? ServerPeerId;
         }
@@ -464,7 +468,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   function requestFullSnapshot(): void {
     options.transport.send(
       "reliable",
-      encodeControl(ControlType.FullSnapshotRequest, options.clock.tick(), clientCapabilities()),
+      encodeControl(ControlType.FullSnapshotRequest, options.clock.tick(), clientCapabilities(), undefined, options.protocolHash),
     );
   }
 
@@ -472,7 +476,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     start() {
       options.transport.send(
         "reliable",
-        encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities()),
+        encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities(), undefined, options.protocolHash),
       );
     },
     peerId() {
@@ -490,6 +494,19 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
 function clientCapabilities(): number {
   return ControlCapability.BatchedSnapshots;
+}
+
+function assertProtocolHashMatch(
+  side: "server" | "client",
+  expected: string | undefined,
+  received: string | undefined,
+): void {
+  if (expected === undefined || received === undefined) {
+    return;
+  }
+  if (expected !== received) {
+    throw new Error(`SnapScript protocol hash mismatch on ${side}: expected ${expected}, received ${received}`);
+  }
 }
 
 function logError(logger: Logger | undefined, message: string, error: unknown): void {

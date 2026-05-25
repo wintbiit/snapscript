@@ -29,7 +29,7 @@ export class NetRefImpl<T> implements NetRef<T> {
   }
 
   get value(): T {
-    return this.#value;
+    return exposeValue(this.#internalMeta, this.#value);
   }
 
   set value(value: T) {
@@ -37,7 +37,7 @@ export class NetRefImpl<T> implements NetRef<T> {
   }
 
   peek(): T {
-    return this.#value;
+    return exposeValue(this.#internalMeta, this.#value);
   }
 
   set(value: T): void {
@@ -85,7 +85,17 @@ function publicMeta<T>(meta: InternalFieldMeta<T>): FieldMeta<T> {
 
 function snapshotValue<T>(meta: InternalFieldMeta<T>, value: T): T {
   meta.codec.validate?.(value);
-  const clone = meta.codec.clone?.(value) ?? value;
+  return freezeSnapshot(meta.codec.clone?.(value) ?? value);
+}
+
+function exposeValue<T>(meta: InternalFieldMeta<T>, value: T): T {
+  return freezeSnapshot(meta.codec.clone?.(value) ?? value);
+}
+
+function freezeSnapshot<T>(clone: T): T {
+  if (clone instanceof Uint8Array) {
+    return clone;
+  }
   if (typeof clone === "object" && clone !== null) {
     return Object.freeze(clone);
   }

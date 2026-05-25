@@ -3,7 +3,9 @@ import {
   angle16,
   angle12,
   angle8,
+  arrayOf,
   bool,
+  bytesOf,
   enumOf,
   f32,
   flags,
@@ -11,6 +13,7 @@ import {
   i32,
   i8,
   qf32,
+  stringOf,
   u16,
   u32,
   u8,
@@ -57,6 +60,9 @@ describe("binary runtime", () => {
       [codecForField(qf32({ min: -10, max: 10, precision: 0.01, default: 0 })), 1.23],
       [codecForField(flags(0, 5)), 0b10101],
       [codecForField(enumOf(["idle", "run"] as const, "idle")), "run"],
+      [codecForField(stringOf("", { maxBytes: 16 })), "hello"],
+      [codecForField(bytesOf(new Uint8Array(), { maxBytes: 4 })), new Uint8Array([1, 2, 3])],
+      [codecForField(arrayOf(u8(0), [], { maxItems: 4 })), [1, 2, 3]],
       [codecForField(vec2q({ min: -10, max: 10, precision: 0.1, default: { x: 0, y: 0 } })), { x: 1.2, y: -3.4 }],
       [
         codecForField(vec3q({ min: -10, max: 10, precision: 0.1, default: { x: 0, y: 0, z: 0 } })),
@@ -88,8 +94,11 @@ describe("binary runtime", () => {
     expect(results[12]).toBeCloseTo(1.23, 2);
     expect(results[13]).toBe(0b10101);
     expect(results[14]).toBe("run");
-    expect(results[15]).toEqual({ x: 1.200000000000001, y: -3.3999999999999995 });
-    expect(results[16]).toEqual({ x: 1.200000000000001, y: -3.3999999999999995, z: 5.600000000000001 });
+    expect(results[15]).toBe("hello");
+    expect(results[16]).toEqual(new Uint8Array([1, 2, 3]));
+    expect(results[17]).toEqual([1, 2, 3]);
+    expect(results[18]).toEqual({ x: 1.200000000000001, y: -3.3999999999999995 });
+    expect(results[19]).toEqual({ x: 1.200000000000001, y: -3.3999999999999995, z: 5.600000000000001 });
   });
 
   it("rejects duplicate enum values", () => {
@@ -103,5 +112,11 @@ describe("binary runtime", () => {
 
     expect(() => codec.write(new BitWriter(), "walk")).toThrow(/Unknown enum value/);
     expect(() => codec.write(new BitWriter(), "run")).not.toThrow();
+  });
+
+  it("validates string, bytes, and array bounds", () => {
+    expect(() => stringOf("toolong", { maxBytes: 3 })).toThrow(/exceeds maxBytes/);
+    expect(() => bytesOf(new Uint8Array([1, 2]), { maxBytes: 1 })).toThrow(/exceeds maxBytes/);
+    expect(() => arrayOf(u8(0), [1, 2], { maxItems: 1 })).toThrow(/exceeds maxItems/);
   });
 });

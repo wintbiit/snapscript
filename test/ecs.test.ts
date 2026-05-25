@@ -474,6 +474,16 @@ describe("ecs world", () => {
     );
   });
 
+  it("reports the failing system name and phase", () => {
+    const host = createTestServerWorld();
+
+    host.system("boom", "update", () => {
+      throw new Error("broken");
+    });
+
+    expect(() => host.tick()).toThrow(/world\.system\(\) "boom" failed in phase "update"/);
+  });
+
   it("freezes system contexts shared within a phase", () => {
     const host = createTestServerWorld();
     const seen: string[] = [];

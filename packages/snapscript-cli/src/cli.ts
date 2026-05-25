@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { checkSnap, generateSnapFile } from "./idl/index";
+import { checkSnapFile, generateSnapFile } from "./idl/index";
 import { formatReport, generateProject } from "./project";
 
 function main(argv: readonly string[]): number {
@@ -16,7 +15,7 @@ function main(argv: readonly string[]): number {
 
   try {
     if (command === "check") {
-      checkSnap(readFileSync(input, "utf8"));
+      checkSnapFile(input);
       console.log(`OK ${input}`);
       return 0;
     }

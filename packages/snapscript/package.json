@@ -4,7 +4,9 @@
   "description": "Platform-agnostic TypeScript network synchronization framework.",
   "license": "Apache-2.0",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",

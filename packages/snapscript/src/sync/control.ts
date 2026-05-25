@@ -16,6 +16,7 @@ export interface ControlMessage {
   readonly type: ControlType;
   readonly capabilities: number;
   readonly peerId?: number;
+  readonly protocolHash?: string;
 }
 
 export function encodeControl(
@@ -23,6 +24,7 @@ export function encodeControl(
   tick: number,
   capabilities = 0,
   peerId?: number,
+  protocolHash?: string,
 ): Uint8Array {
   const writer = new BitWriter();
   writer.writeU8(MessageType.Control);
@@ -30,8 +32,10 @@ export function encodeControl(
   writer.writeU8(type);
   if (type === ControlType.PeerAssigned) {
     writer.writeVarUint(peerId ?? 0);
-  } else if (capabilities !== 0) {
+    writeOptionalString(writer, protocolHash);
+  } else if (capabilities !== 0 || protocolHash !== undefined) {
     writer.writeVarUint(capabilities);
+    writeOptionalString(writer, protocolHash);
   }
   return writer.finish();
 }
@@ -46,11 +50,13 @@ export function decodeControl(bytes: Uint8Array): ControlMessage {
   const tick = reader.readU32();
   const type = reader.readU8() as ControlType;
   if (type === ControlType.PeerAssigned) {
+    const peerId = reader.readVarUint();
     return {
       tick,
       type,
       capabilities: 0,
-      peerId: reader.readVarUint(),
+      peerId,
+      ...optionalProtocolHash(readOptionalString(reader)),
     };
   }
   const capabilities = reader.remaining() === 0 ? 0 : reader.readVarUint();
@@ -59,5 +65,34 @@ export function decodeControl(bytes: Uint8Array): ControlMessage {
     tick,
     type,
     capabilities,
+    ...optionalProtocolHash(readOptionalString(reader)),
   };
+}
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function writeOptionalString(writer: BitWriter, value: string | undefined): void {
+  if (value === undefined) {
+    writer.writeVarUint(0);
+    return;
+  }
+  const bytes = textEncoder.encode(value);
+  writer.writeVarUint(bytes.byteLength + 1);
+  writer.writeBytes(bytes);
+}
+
+function readOptionalString(reader: BitReader): string | undefined {
+  if (reader.remaining() === 0) {
+    return undefined;
+  }
+  const encodedLength = reader.readVarUint();
+  if (encodedLength === 0) {
+    return undefined;
+  }
+  return textDecoder.decode(reader.readBytes(encodedLength - 1));
+}
+
+function optionalProtocolHash(protocolHash: string | undefined): Pick<ControlMessage, "protocolHash"> | Record<never, never> {
+  return protocolHash === undefined ? {} : { protocolHash };
 }

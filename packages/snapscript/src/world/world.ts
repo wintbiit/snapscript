@@ -930,7 +930,11 @@ class WorldCore implements QueryWorldAccess {
     const systemContext = Object.isFrozen(sourceContext) ? sourceContext : Object.freeze(sourceContext);
     // Systems use a registration snapshot so systems added mid-phase start on the next tick.
     for (const system of [...(this.#systems.get(phase) ?? [])]) {
-      system.fn(owner, systemContext);
+      try {
+        system.fn(owner, systemContext);
+      } catch (cause) {
+        throw new Error(`world.system() "${system.name}" failed in phase "${phase}"`, { cause });
+      }
     }
   }
 
@@ -2146,6 +2150,7 @@ function serverRuntimeOptions(
     transport,
     clock,
     registry: registryFromOptions(options),
+    ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
     isVisible: (peer, entityId) => world.isVisible(peer, entityId),
     canReusePeerSnapshots,
@@ -2165,6 +2170,7 @@ function clientRuntimeOptions(
     transport,
     clock,
     registry: registryFromOptions(options),
+    ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
     onSnapshot,
   };

@@ -4,7 +4,9 @@
   "description": "SnapScript project and protocol generation CLI.",
   "license": "Apache-2.0",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "snapscript": "./dist/cli.mjs"
   },

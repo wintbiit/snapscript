@@ -4,7 +4,9 @@
   "description": "Create a platform-neutral SnapScript game core package.",
   "license": "Apache-2.0",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "create-snapscript": "./dist/cli.mjs"
   },

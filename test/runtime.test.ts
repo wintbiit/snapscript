@@ -4,8 +4,12 @@ import {
   defineComponent,
   defineEntity,
   defineEvent,
+  arrayOf,
+  bytesOf,
   qf32,
+  stringOf,
   u16,
+  u8,
   varu32,
   type ChannelName,
   type ClientTransport,
@@ -134,6 +138,43 @@ describe("sync runtime", () => {
       type: ControlType.Hello,
       capabilities: ControlCapability.BatchedSnapshots,
     });
+    expect(decodeControl(encodeControl(ControlType.Hello, 9, ControlCapability.BatchedSnapshots, undefined, "abc"))).toEqual({
+      tick: 9,
+      type: ControlType.Hello,
+      capabilities: ControlCapability.BatchedSnapshots,
+      protocolHash: "abc",
+    });
+  });
+
+  it("rejects protocol hash mismatches during handshake", () => {
+    const protocol = testProtocol();
+    const serverWorld = createTestServerWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const registry = createRegistry();
+    const [serverTransport, clientTransport] = pair();
+    const errors: string[] = [];
+    createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+      protocolHash: "server",
+      logger: {
+        error: (_message, context) => errors.push(String(context?.error)),
+      },
+    });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+      protocolHash: "client",
+    });
+
+    client.start();
+
+    expect(errors[0]).toContain("protocol hash mismatch");
+    expect(client.peerId()).toBe(ServerPeerId);
   });
 
   it("sends a full snapshot when the client starts", () => {
@@ -195,6 +236,41 @@ describe("sync runtime", () => {
 
     expect(clientWorld.get(player.id, PlayerState)?.hp.value).toBe(40);
     expect(worldInternals(clientWorld).getDirtyMask(player.id)).toBe(0);
+  });
+
+  it("round-trips string, bytes, and array fields through snapshots", () => {
+    const Profile = defineComponent("RuntimeProfile", {
+      name: stringOf("", { maxBytes: 32 }),
+      bytes: bytesOf(new Uint8Array(), { maxBytes: 8 }),
+      scores: arrayOf(u8(0), [], { maxItems: 4 }),
+    });
+    const registry = createRegistry().registerComponent(Profile);
+    const protocol = testProtocol(Profile);
+    const serverWorld = createTestServerWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const entity = serverWorld.spawn();
+    const serverProfile = serverWorld.add(entity, Profile, {
+      name: "alice",
+      bytes: new Uint8Array([1, 2]),
+      scores: [3, 4],
+    });
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const client = createSyncClient({ world: clientWorld, transport: clientTransport, clock: clock(), registry });
+
+    client.start();
+    expect(clientWorld.get(entity.id, Profile)?.name.value).toBe("alice");
+    expect(clientWorld.get(entity.id, Profile)?.bytes.value).toEqual(new Uint8Array([1, 2]));
+    expect(clientWorld.get(entity.id, Profile)?.scores.value).toEqual([3, 4]);
+
+    serverProfile.name.value = "bob";
+    serverProfile.bytes.value = new Uint8Array([5, 6]);
+    serverProfile.scores.value = [7, 8];
+    host.update();
+    expect(clientWorld.get(entity.id, Profile)?.name.value).toBe("bob");
+    expect(clientWorld.get(entity.id, Profile)?.bytes.value).toEqual(new Uint8Array([5, 6]));
+    expect(clientWorld.get(entity.id, Profile)?.scores.value).toEqual([7, 8]);
+    expect(client).toBeDefined();
   });
 
   it("routes client commands to host handlers and syncs resulting dirty state", () => {

@@ -2,7 +2,9 @@ export {
   angle12,
   angle16,
   angle8,
+  arrayOf,
   bool,
+  bytesOf,
   enumOf,
   f32,
   flags,
@@ -10,6 +12,7 @@ export {
   i32,
   i8,
   qf32,
+  stringOf,
   u16,
   u32,
   u8,
@@ -18,9 +21,12 @@ export {
   vec3q,
 } from "./fields";
 export type {
+  ArrayFieldOptions,
+  BytesFieldOptions,
   QuantizedFloatOptions,
   QuantizedVec2Options,
   QuantizedVec3Options,
+  StringFieldOptions,
   Vec2,
   Vec3,
 } from "./fields";

@@ -87,6 +87,7 @@ function renderBaseProject(
   kind: "example" | "generic",
 ): readonly { readonly path: string; readonly content: string }[] {
   return [
+    { path: "README.md", content: render(rootReadmeTemplate, data) },
     { path: "package.json", content: render(packageJsonTemplate, data) },
     { path: "tsconfig.json", content: render(tsconfigTemplate, data) },
     { path: "src/index.ts", content: render(indexTemplate, data) },
@@ -164,6 +165,42 @@ const packageJsonTemplate = `<%~ JSON.stringify({
     "./generated/snapscript/protocol": "./src/generated/snapscript/protocol.ts",
   },
 }, null, 2) %>
+`;
+
+const rootReadmeTemplate = `# <%= it.packageName %>
+
+This package is a platform-neutral SnapScript game core. It owns protocol definitions,
+authoritative server/client world creation, gameplay systems, and RPC handlers. It does not own
+browser, Node, Puerts, engine renderer, persistence, login, matchmaking, or production networking.
+
+## Commands
+
+- \`pnpm generate\` refreshes files generated from \`<%= it.schemaScriptPath %>\`.
+- \`pnpm typecheck\` checks the core package.
+- \`pnpm test\` runs the package tests.
+- \`pnpm build\` regenerates protocol code, typechecks, and runs tests.
+
+## Ownership
+
+Generated files are written under \`src/generated/snapscript/\` and \`src/systems/generated/\`.
+Do not edit them directly; change \`<%= it.schemaScriptPath %>\` or system files, then run
+\`pnpm generate\`.
+
+User-owned logic lives in:
+
+- \`src/rpc/server/*.command.ts\` for client-to-server commands.
+- \`src/rpc/client/*.event.ts\` for server-to-client events.
+- \`src/systems/server/*.system.ts\` for authoritative server systems.
+- \`src/systems/client/*.system.ts\` for client-side read/presentation systems.
+
+System files are registered in filename order. Each system file exports
+\`register(world)\`.
+
+## Platform Boundary
+
+\`src/transport/memory.ts\` is only for tests and local wiring checks. A real platform layer should
+adapt its transport into SnapScript packets, provide a clock/tick loop, forward input into client
+commands, and render/read snapshots from this core package.
 `;
 
 const tsconfigTemplate = `{
@@ -371,6 +408,8 @@ const exampleServerSystemTemplate = `import type { ServerWorld } from "snapscrip
 import { Health } from "../../generated/snapscript/protocol";
 
 export function register(world: ServerWorld): void {
+  // Server systems are authoritative gameplay. Phase is fixed by the second argument;
+  // files in src/systems/server are registered in filename order.
   world.system("health.clamp", "postUpdate", (world) => {
     world.each([Health] as const, (_entity, health) => {
       health.hp.value = Math.max(0, Math.min(100, health.hp.value));
@@ -382,6 +421,8 @@ export function register(world: ServerWorld): void {
 const genericServerSystemTemplate = `import type { ServerWorld } from "snapscript";
 
 export function register(world: ServerWorld): void {
+  // Server systems are authoritative gameplay. Phase is fixed by the second argument;
+  // files in src/systems/server are registered in filename order.
   world.system("server.update", "update", () => {
     // Add authoritative gameplay systems here.
   });
@@ -392,6 +433,8 @@ const exampleClientSystemTemplate = `import type { ClientWorld } from "snapscrip
 import { Position } from "../../generated/snapscript/protocol";
 
 export function register(world: ClientWorld): void {
+  // Client systems should read replicated state and prepare presentation-facing data.
+  // Files in src/systems/client are registered in filename order.
   world.system("view.collect", "postUpdate", (world) => {
     world.each([Position] as const, (_entity, position) => {
       void position;
@@ -403,6 +446,8 @@ export function register(world: ClientWorld): void {
 const genericClientSystemTemplate = `import type { ClientWorld } from "snapscript";
 
 export function register(world: ClientWorld): void {
+  // Client systems should read replicated state and prepare presentation-facing data.
+  // Files in src/systems/client are registered in filename order.
   world.system("client.update", "postUpdate", () => {
     // Add client-side read or presentation systems here.
   });

@@ -2,7 +2,9 @@ export {
   angle16,
   angle12,
   angle8,
+  arrayOf,
   bool,
+  bytesOf,
   defineComponent,
   defineEntity,
   enumOf,
@@ -12,6 +14,7 @@ export {
   i32,
   i8,
   qf32,
+  stringOf,
   u16,
   u32,
   u8,
@@ -19,7 +22,16 @@ export {
   vec2q,
   vec3q,
 } from "./schema/index";
-export type { QuantizedFloatOptions, QuantizedVec2Options, QuantizedVec3Options, Vec2, Vec3 } from "./schema/index";
+export type {
+  ArrayFieldOptions,
+  BytesFieldOptions,
+  QuantizedFloatOptions,
+  QuantizedVec2Options,
+  QuantizedVec3Options,
+  StringFieldOptions,
+  Vec2,
+  Vec3,
+} from "./schema/index";
 export type {
   ComponentMap,
   ComponentSchema,

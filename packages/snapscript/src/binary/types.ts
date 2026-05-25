@@ -7,6 +7,7 @@ export interface BinaryWriter {
   writeI32(value: number): void;
   writeF32(value: number): void;
   writeVarU32(value: number): void;
+  writeBytes(bytes: Uint8Array): void;
   writeBits(value: number, bitCount: number): void;
   writeBool(value: boolean): void;
   align(): void;
@@ -22,6 +23,7 @@ export interface BinaryReader {
   readI32(): number;
   readF32(): number;
   readVarU32(): number;
+  readBytes(byteLength: number): Uint8Array;
   readBits(bitCount: number): number;
   readBool(): boolean;
   align(): void;

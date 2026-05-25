@@ -6,6 +6,9 @@ function numberEquals(a: number, b: number): boolean {
   return Object.is(a, b);
 }
 
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
 function assertIntegerInRange(name: string, value: number, min: number, max: number): void {
   if (!Number.isInteger(value) || value < min || value > max) {
     throw new RangeError(`${name} must be an integer in [${min}, ${max}], got ${value}`);
@@ -206,6 +209,24 @@ export interface QuantizedFloatOptions {
   readonly max: number;
   readonly precision: number;
   readonly default: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+/** Options for UTF-8 strings encoded as `varuint byteLength + bytes`. */
+export interface StringFieldOptions {
+  readonly maxBytes: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+/** Options for byte arrays encoded as `varuint byteLength + bytes`. */
+export interface BytesFieldOptions {
+  readonly maxBytes: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+/** Options for variable-count arrays encoded as `varuint length + repeated item codec`. */
+export interface ArrayFieldOptions {
+  readonly maxItems: number;
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -412,6 +433,147 @@ function createEnumCodec<T extends string>(values: readonly T[]): FieldCodec<T> 
   };
 }
 
+function createStringCodec(options: StringFieldOptions): FieldCodec<string> {
+  assertMax("stringOf maxBytes", options.maxBytes);
+  return {
+    kind: "string",
+    write(writer, value) {
+      assertStringBytes(value, options.maxBytes);
+      const bytes = textEncoder.encode(value);
+      writer.writeVarU32(bytes.byteLength);
+      writer.writeBytes(bytes);
+    },
+    read(reader) {
+      const byteLength = reader.readVarU32();
+      if (byteLength > options.maxBytes) {
+        throw new RangeError(`string byte length ${byteLength} exceeds maxBytes ${options.maxBytes}`);
+      }
+      return textDecoder.decode(reader.readBytes(byteLength));
+    },
+    equals(a, b) {
+      return a === b;
+    },
+    validate(value) {
+      assertStringBytes(value, options.maxBytes);
+    },
+  };
+}
+
+function createBytesCodec(options: BytesFieldOptions): FieldCodec<Uint8Array> {
+  assertMax("bytesOf maxBytes", options.maxBytes);
+  return {
+    kind: "bytes",
+    write(writer, value) {
+      assertBytes(value, options.maxBytes);
+      writer.writeVarU32(value.byteLength);
+      writer.writeBytes(value);
+    },
+    read(reader) {
+      const byteLength = reader.readVarU32();
+      if (byteLength > options.maxBytes) {
+        throw new RangeError(`bytes length ${byteLength} exceeds maxBytes ${options.maxBytes}`);
+      }
+      return reader.readBytes(byteLength);
+    },
+    equals(a, b) {
+      if (a.byteLength !== b.byteLength) return false;
+      for (let index = 0; index < a.byteLength; index += 1) {
+        if (a[index] !== b[index]) return false;
+      }
+      return true;
+    },
+    clone(value) {
+      return new Uint8Array(value);
+    },
+    validate(value) {
+      assertBytes(value, options.maxBytes);
+    },
+  };
+}
+
+function createArrayCodec<T>(
+  itemField: FieldDefinition<T>,
+  options: ArrayFieldOptions,
+): FieldCodec<readonly T[]> {
+  assertMax("arrayOf maxItems", options.maxItems);
+  const itemCodec = codecForField(itemField);
+  return {
+    kind: "array",
+    write(writer, value) {
+      assertArray(value, options.maxItems, itemCodec);
+      writer.writeVarU32(value.length);
+      for (const item of value) {
+        itemCodec.write(writer, item);
+      }
+    },
+    read(reader) {
+      const length = reader.readVarU32();
+      if (length > options.maxItems) {
+        throw new RangeError(`array length ${length} exceeds maxItems ${options.maxItems}`);
+      }
+      const items: T[] = [];
+      for (let index = 0; index < length; index += 1) {
+        items.push(itemCodec.read(reader));
+      }
+      return Object.freeze(items);
+    },
+    equals(a, b) {
+      if (a.length !== b.length) return false;
+      for (let index = 0; index < a.length; index += 1) {
+        if (!itemCodec.equals(a[index]!, b[index]!)) return false;
+      }
+      return true;
+    },
+    clone(value) {
+      return Object.freeze(value.map((item) => itemCodec.clone?.(item) ?? item));
+    },
+    validate(value) {
+      assertArray(value, options.maxItems, itemCodec);
+    },
+  };
+}
+
+function assertMax(name: string, value: number): void {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new RangeError(`${name} must be an integer in [0, 4294967295], got ${value}`);
+  }
+}
+
+function assertStringBytes(value: string, maxBytes: number): void {
+  if (typeof value !== "string") {
+    throw new TypeError(`string must be a string, got ${value}`);
+  }
+  const byteLength = textEncoder.encode(value).byteLength;
+  if (byteLength > maxBytes) {
+    throw new RangeError(`string byte length ${byteLength} exceeds maxBytes ${maxBytes}`);
+  }
+}
+
+function assertBytes(value: Uint8Array, maxBytes: number): void {
+  if (!(value instanceof Uint8Array)) {
+    throw new TypeError("bytes must be a Uint8Array");
+  }
+  if (value.byteLength > maxBytes) {
+    throw new RangeError(`bytes length ${value.byteLength} exceeds maxBytes ${maxBytes}`);
+  }
+}
+
+function assertArray<T>(
+  value: readonly T[],
+  maxItems: number,
+  itemCodec: FieldCodec<T>,
+): void {
+  if (!Array.isArray(value)) {
+    throw new TypeError("array must be an array");
+  }
+  if (value.length > maxItems) {
+    throw new RangeError(`array length ${value.length} exceeds maxItems ${maxItems}`);
+  }
+  for (const item of value) {
+    itemCodec.validate?.(item);
+  }
+}
+
 function enumValuesSnapshot<T extends string>(values: readonly T[]): readonly T[] {
   if (!Array.isArray(values)) {
     throw new Error("enumOf values must be a non-empty array of strings");
@@ -464,6 +626,9 @@ function freezeMetadata(
 function snapshotDefaultValue<T>(codec: FieldCodec<T>, value: T): T {
   codec.validate?.(value);
   const clone = codec.clone?.(value) ?? value;
+  if (clone instanceof Uint8Array) {
+    return clone;
+  }
   if (typeof clone === "object" && clone !== null) {
     return Object.freeze(clone);
   }
@@ -583,4 +748,32 @@ export function enumOf<const TValues extends readonly string[]>(
   metadata?: Record<string, unknown>,
 ): FieldDefinition<TValues[number]> {
   return field(createEnumCodec(values), defaultValue, metadata);
+}
+
+/** Defines a UTF-8 string field with an encoded byte limit. */
+export function stringOf(
+  defaultValue: string,
+  options: StringFieldOptions,
+): FieldDefinition<string> {
+  assertPlainObjectMap("stringOf options", options);
+  return field(createStringCodec(options), defaultValue, options.metadata);
+}
+
+/** Defines a byte-array field. Defaults and assigned values are cloned as `Uint8Array`. */
+export function bytesOf(
+  defaultValue: Uint8Array,
+  options: BytesFieldOptions,
+): FieldDefinition<Uint8Array> {
+  assertPlainObjectMap("bytesOf options", options);
+  return field(createBytesCodec(options), defaultValue, options.metadata);
+}
+
+/** Defines a variable-count array field. Replace the whole array when updating it. */
+export function arrayOf<T>(
+  itemField: FieldDefinition<T>,
+  defaultValue: readonly T[],
+  options: ArrayFieldOptions,
+): FieldDefinition<readonly T[]> {
+  assertPlainObjectMap("arrayOf options", options);
+  return field(createArrayCodec(itemField, options), defaultValue, options.metadata);
 }

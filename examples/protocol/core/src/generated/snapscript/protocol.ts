@@ -18,25 +18,43 @@ export type MovementMovePayload = RpcPayload<typeof MovementMove>;
 export const MovementMoveDisabled = defineEvent("Movement.MoveDisabled", { disabled: bool(false) }, { id: 2, fieldIds: {"disabled":0}, channel: "reliable" });
 export type MovementMoveDisabledPayload = RpcPayload<typeof MovementMoveDisabled>;
 
+export const protocolHash = "cc1f9d0503009fb94139c3241ecc545c0c1465ce8ac11d844cb86897f7069f0f";
+
 export const protocol = defineProtocol({
   components: { Position, Health },
   prefabs: { Player },
   commands: { MovementMove },
   events: { MovementMoveDisabled },
+  hash: protocolHash,
 });
 
 export const rpc = {
   commands: {
     MovementMove: {
-      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof MovementMove>>) { world.send(MovementMove, payload); },
-      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof MovementMove> & FieldDefinitions>) { return world.on(MovementMove, handler); },
+      /** Sends the MovementMove command from a client world to the server. */
+      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof MovementMove>>) {
+        world.send(MovementMove, payload);
+      },
+      /** Registers the server-side handler for the MovementMove command. */
+      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof MovementMove> & FieldDefinitions>) {
+        return world.on(MovementMove, handler);
+      },
     },
   },
   events: {
     MovementMoveDisabled: {
-      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.broadcast(MovementMoveDisabled, payload); },
-      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) { world.sendTo(peerId, MovementMoveDisabled, payload); },
-      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof MovementMoveDisabled> & FieldDefinitions>) { return world.on(MovementMoveDisabled, handler); },
+      /** Broadcasts the MovementMoveDisabled event from the server to all connected clients. */
+      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) {
+        world.broadcast(MovementMoveDisabled, payload);
+      },
+      /** Sends the MovementMoveDisabled event from the server to one peer id. */
+      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof MovementMoveDisabled>>) {
+        world.sendTo(peerId, MovementMoveDisabled, payload);
+      },
+      /** Registers the client-side handler for the MovementMoveDisabled event. */
+      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof MovementMoveDisabled> & FieldDefinitions>) {
+        return world.on(MovementMoveDisabled, handler);
+      },
     },
   },
 } as const;

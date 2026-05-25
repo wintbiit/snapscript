@@ -28,6 +28,7 @@ export interface ProtocolDefinition<
   readonly prefabs: TPrefabs;
   readonly commands: TCommands;
   readonly events: TEvents;
+  readonly hash?: string;
   readonly [protocolBrand]: true;
   manifest(): ProtocolManifest;
 }
@@ -57,6 +58,7 @@ export interface DefineProtocolInput<
   readonly prefabs?: TPrefabs;
   readonly commands?: TCommands;
   readonly events?: TEvents;
+  readonly hash?: string;
 }
 
 /** Creates the protocol registry that binds schemas and RPC definitions to a world. */
@@ -73,6 +75,7 @@ export function defineProtocol<
   const prefabs = cloneProtocolMap<TPrefabs>(source.prefabs, "prefabs");
   const commands = cloneProtocolMap<TCommands>(source.commands, "commands");
   const events = cloneProtocolMap<TEvents>(source.events, "events");
+  const hash = assertProtocolHash(source.hash);
   const registry = createRegistry();
   const registeredComponents = new Map<number, ComponentSchema>();
 
@@ -111,6 +114,7 @@ export function defineProtocol<
     prefabs,
     commands,
     events,
+    ...(hash === undefined ? {} : { hash }),
     [protocolBrand]: true as const,
     manifest() {
       return Object.freeze({
@@ -135,6 +139,14 @@ export function defineProtocol<
   });
   protocolRegistries.set(protocol, registry);
   return protocol;
+}
+
+function assertProtocolHash(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("defineProtocol() hash must be a non-empty string");
+  }
+  return value;
 }
 
 function assertProtocolInput(value: unknown): Record<string, unknown> {

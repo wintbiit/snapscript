@@ -8,6 +8,12 @@ generated code owns mechanical wiring, and user code owns gameplay logic. Browse
 Unity/Unreal bindings, deployment, persistence, accounts, matchmaking, rendering, and real network
 adapters live in platform projects that depend on the generated core package.
 
+The repository examples follow that split:
+
+- `examples/protocol/core` is the generated-style game core package
+- `examples/protocol/app` is a browser/Vite platform integration
+- `examples/protocol/node` is a Node/WebSocket platform integration
+
 ## User Goals
 
 SnapScript users should be able to:
@@ -54,6 +60,7 @@ deployable server app and not a browser app:
 ```txt
 my-game-core/
   game.snap
+  README.md
   package.json
   tsconfig.json
   src/
@@ -169,6 +176,8 @@ core package root.
 
 The `.snap` file is the source of truth for:
 
+- file-local relative imports
+- enums
 - structs
 - components
 - entities
@@ -198,6 +207,27 @@ Stable ids are deliberately simple:
 
 Generated projects do not use `snapscript.lock.json`. If a project needs schema evolution later,
 that should be an explicit future feature, not default hidden state.
+
+The v1 compiler supports:
+
+```snap
+import "./common.snap"
+
+enum Team { red blue }
+
+component PlayerInfo {
+  name: string(default: "", maxBytes: 32)
+  avatar: bytes(maxBytes: 128)
+  recentScores: array(u16(0), maxItems: 8)
+  team: Team(default: red)
+}
+```
+
+Imports are file-relative only. Package imports and glob imports are intentionally out of scope.
+Generated protocols include a deterministic protocol hash derived from canonical manifest JSON.
+Generated server/client worlds exchange that hash during the early control handshake and fail before
+gameplay state is applied when both sides provide different hashes. Hand-written protocols may omit
+the hash for compatibility.
 
 Systems are code because systems express behavior, ordering, and dependencies. Putting systems in
 IDL would make the protocol file responsible for runtime composition and would blur the framework
@@ -436,6 +466,8 @@ System module validation:
 - server system files receive `ServerWorld`
 - client system files receive `ClientWorld`
 - duplicate runtime system names are still rejected by `world.system()`
+- runtime system failures include the failing system name and phase in the thrown error
+- `snapscript generate` reports generated system registry files along with protocol/RPC files
 - file-name order is registration order, so prefixes such as `10-`, `20-`, `30-` are recommended
 
 System naming convention:
@@ -450,6 +482,13 @@ Recommended phase usage:
 - `update`: mutate authoritative server state or run core simulation
 - `postUpdate`: derive read models, emit side effects, cleanup
 - `network`: advanced server-side hook before runtime sends snapshots; avoid by default
+
+Planned but not v1 behavior:
+
+- explicit system groups
+- runtime enable/disable switches
+- stronger generated type facade for grouped system registration
+- optional per-system timing logs
 
 ## Server And Client Composition
 

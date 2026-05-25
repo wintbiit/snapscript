@@ -6,7 +6,7 @@
   "scripts": {
     "check": "pnpm --dir core check",
     "generate": "pnpm --dir core generate",
-    "build": "pnpm --dir core build && pnpm --dir app build",
+    "build": "pnpm --dir core build && pnpm --dir app build && pnpm --dir node build",
     "dev": "pnpm --dir core generate && pnpm --dir app dev"
   }
 }

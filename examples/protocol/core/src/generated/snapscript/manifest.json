@@ -1,4 +1,5 @@
 {
+  "enums": {},
   "components": {
     "Position": {
       "id": 1,
@@ -6,12 +7,75 @@
         "x": 0,
         "y": 1,
         "hidden": 2
+      },
+      "types": {
+        "x": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -128
+            },
+            {
+              "name": "max",
+              "value": 128
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
+        },
+        "y": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -128
+            },
+            {
+              "name": "max",
+              "value": 128
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
+        },
+        "hidden": {
+          "name": "bool",
+          "args": [
+            {
+              "name": "default",
+              "value": false
+            }
+          ]
+        }
       }
     },
     "Health": {
       "id": 2,
       "fields": {
         "hp": 0
+      },
+      "types": {
+        "hp": {
+          "name": "u16",
+          "args": [
+            {
+              "value": 100
+            }
+          ]
+        }
       }
     }
   },
@@ -26,6 +90,50 @@
       "fields": {
         "dx": 0,
         "dy": 1
+      },
+      "types": {
+        "dx": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -1
+            },
+            {
+              "name": "max",
+              "value": 1
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
+        },
+        "dy": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -1
+            },
+            {
+              "name": "max",
+              "value": 1
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
+        }
       }
     }
   },
@@ -34,6 +142,12 @@
       "id": 2,
       "fields": {
         "disabled": 0
+      },
+      "types": {
+        "disabled": {
+          "name": "bool",
+          "args": []
+        }
       }
     }
   }

@@ -41,6 +41,8 @@ describe("snapscript project generation", () => {
       const root = join(dir, "game-core");
 
       expect(readFileSync(join(root, "game.snap"), "utf8")).toContain('syntax = "v1"');
+      expect(readFileSync(join(root, "README.md"), "utf8")).toContain("pnpm generate");
+      expect(readFileSync(join(root, "README.md"), "utf8")).toContain("platform-neutral SnapScript game core");
       expect(readFileSync(join(root, "package.json"), "utf8")).toContain("snapscript generate game.snap");
       expect(readFileSync(join(root, "src/generated/snapscript/rpc.ts"), "utf8")).toContain(
         'from "../../rpc/server/move.command"',
@@ -61,10 +63,12 @@ describe("snapscript project generation", () => {
       createProject({ cwd: dir, targetDir: "core", schemaPath: "external.snap" });
       const packageJson = readFileSync(join(dir, "core", "package.json"), "utf8");
       const createServer = readFileSync(join(dir, "core", "src/create-server.ts"), "utf8");
+      const readme = readFileSync(join(dir, "core", "README.md"), "utf8");
       const test = readFileSync(join(dir, "core", "test/roundtrip.test.ts"), "utf8");
 
       expect(packageJson).toContain("snapscript check ../external.snap");
       expect(packageJson).toContain("snapscript generate ../external.snap --out src/generated/snapscript");
+      expect(readme).toContain("../external.snap");
       expect(createServer).not.toContain("Player");
       expect(test).not.toContain("MovementMove");
       expect(() => readFileSync(join(dir, "core", "game.snap"), "utf8")).toThrow();
