@@ -2,17 +2,17 @@
 
 Last reviewed: 2026-05-25
 
-This document defines the project style that `snapscript-cli` should generate. The target project is
-a platform-neutral game core package: `.snap` owns protocol shape, generated code owns mechanical
-wiring, and user code owns gameplay logic. Browser, Node, puerts, Unity/Unreal bindings, deployment,
-persistence, accounts, matchmaking, rendering, and real network adapters live in platform projects
-that depend on the generated core package.
+This document defines the project style that `create-snapscript` initializes and `snapscript-cli`
+maintains. The target project is a platform-neutral game core package: `.snap` owns protocol shape,
+generated code owns mechanical wiring, and user code owns gameplay logic. Browser, Node, puerts,
+Unity/Unreal bindings, deployment, persistence, accounts, matchmaking, rendering, and real network
+adapters live in platform projects that depend on the generated core package.
 
 ## User Goals
 
 SnapScript users should be able to:
 
-- create a complete game core package with `snapscript new`
+- create a complete game core package with `npm create snapscript@latest`
 - define replicated protocol once in a root `.snap` file
 - regenerate protocol and RPC bindings with `snapscript generate`
 - write gameplay logic in stable files that are never overwritten
@@ -33,19 +33,23 @@ Users should not need to:
 
 ## Package Boundary
 
-The repo has two packages:
+The repo has three packages:
 
 - `snapscript`: portable runtime library
-- `snapscript-cli`: project/protocol generation tooling
+- `snapscript-cli`: protocol check/generate tooling for existing projects
+- `create-snapscript`: npm create package for project initialization
 
-The runtime package stays small and platform-neutral. Project templates, `.snap` parsing, project
-initialization, system scanning, generated registries, formatting, and stale-file reporting belong
-in `snapscript-cli`.
+The runtime package stays small and platform-neutral. One-time project templates belong in
+`create-snapscript`. `.snap` parsing, generated protocol/RPC files, system scanning, generated
+registries, formatting, and stale-file reporting belong in `snapscript-cli`.
+
+Both tooling packages can use Eta for template rendering. Eta is intentionally only a rendering tool
+here; the tooling still owns file policy such as overwrite, create-only, and stale reporting.
 
 ## Core Package Shape
 
-`snapscript new my-game-core` should generate a complete TypeScript package, not a deployable server
-app and not a browser app:
+`npm create snapscript@latest my-game-core` should generate a complete TypeScript package, not a
+deployable server app and not a browser app:
 
 ```txt
 my-game-core/
@@ -76,6 +80,8 @@ my-game-core/
     transport/
       memory.ts
       README.md
+  test/
+    roundtrip.test.ts
 ```
 
 This layout uses SnapScript vocabulary rather than Go-style `internal/handler/logic/svc`. The user
@@ -87,14 +93,34 @@ sees protocol, RPC logic, systems, generated files, world composition, and test 
 {
   "scripts": {
     "snap:check": "snapscript check game.snap",
-    "snap:generate": "snapscript generate game.snap --out src/generated/snapscript"
+    "snap:generate": "snapscript generate game.snap --out src/generated/snapscript",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   }
 }
 ```
 
+`npm create snapscript@latest <name>` is equivalent to:
+
+- create the directory
+- write the root `game.snap`
+- write package and TypeScript config files
+- generate protocol files from `game.snap`
+- create initial RPC logic stubs
+- create initial system files
+- create generated RPC and system registries
+- create in-memory test transport
+- create a minimal round-trip test
+
+`npm create snapscript@latest <name> -- --schema ../game.snap` uses the external schema in generated
+scripts and does not copy it into the target directory.
+
+It does not install dependencies, start a server, generate a browser app, or choose a production
+network stack.
+
 ## Ownership Rules
 
-Generated and overwritten on every `snapscript generate`:
+Generated and overwritten on every `snapscript generate <schema.snap> --out src/generated/snapscript`:
 
 - `src/generated/snapscript/protocol.ts`
 - `src/generated/snapscript/manifest.json`
@@ -122,6 +148,22 @@ Never generated after project creation unless explicitly requested:
 
 When a command/event is removed from `.snap`, the CLI should not delete user logic files. It should
 report stale logic files so the user can delete or migrate them intentionally.
+
+`snapscript generate` is the command that keeps generated wiring current after schema edits. It
+should:
+
+- parse and validate the `.snap` file
+- overwrite protocol files under `src/generated/snapscript/`
+- overwrite generated RPC registry files
+- overwrite generated system registry files
+- create missing RPC logic stubs
+- never overwrite existing RPC logic stubs
+- never overwrite user system files
+- report stale RPC logic files
+- report invalid system modules that do not export `register(world)`
+
+`generate` resolves the project root from the current working directory. Run it from the generated
+core package root.
 
 ## Protocol Files
 
@@ -233,6 +275,24 @@ export function registerClientRpc(world: ClientWorld): void {
 }
 ```
 
+The generated registry imports user logic files directly. Do not generate a user-maintained barrel
+file for RPC handlers by default:
+
+```ts
+import { moveCommand } from "../../rpc/server/move.command";
+import { moveDisabledEvent } from "../../rpc/client/move-disabled.event";
+```
+
+Direct imports keep the dependency graph obvious and remove another mechanical file from user
+ownership. File paths are derived from the `.snap` service/RPC names:
+
+- `service Movement { command Move(...) }` -> `src/rpc/server/move.command.ts`
+- `service Movement { event MoveDisabled(...) }` -> `src/rpc/client/move-disabled.event.ts`
+
+If two service RPCs would map to the same file name, generation should fail with a clear collision
+error. A future version may include service prefixes in paths if this becomes common, but the default
+v1 template optimizes for small game-core packages.
+
 User command logic:
 
 ```ts
@@ -263,6 +323,9 @@ export function moveDisabledEvent(world: ClientWorld, ctx: RpcCtx<MoveDisabledPa
 
 Function stubs are the default recommendation over classes. They are smaller, easier to read, and
 match the current world-first API.
+
+Generated stubs are create-only. If the user has already edited `src/rpc/server/move.command.ts`,
+later `snapscript generate` runs must leave it unchanged and only update generated wiring and types.
 
 ## Service Context
 
@@ -363,6 +426,18 @@ export function registerServerSystems(world: ServerWorld): void {
 }
 ```
 
+The generated registry imports system modules directly, sorted by file name. There is no user-owned
+`src/systems/index.ts`; index files are exactly the mechanical registration code we want the CLI to
+own.
+
+System module validation:
+
+- each `*.system.ts` file must export `register(world)`
+- server system files receive `ServerWorld`
+- client system files receive `ClientWorld`
+- duplicate runtime system names are still rejected by `world.system()`
+- file-name order is registration order, so prefixes such as `10-`, `20-`, `30-` are recommended
+
 System naming convention:
 
 - use dot-separated feature/action names
@@ -381,6 +456,11 @@ Recommended phase usage:
 World creation remains explicit and user-owned. Generated projects are platform-neutral core
 packages, so `src/create-server.ts` and `src/create-client.ts` are composition files, not process or
 browser entrypoints.
+
+These files are generated only when missing. They are intentionally user-owned after project
+creation, because real projects often add initial world state, feature flags, protocol guards, or
+project-specific setup. Regeneration should update imported generated registries, not rewrite these
+composition files.
 
 Generated once:
 
@@ -510,6 +590,10 @@ function frame() {
 }
 ```
 
+The concrete browser reference is `examples/protocol/app`: it owns the WebSocket relay transport,
+browser clock, animation/tick loop, input bridge, and simple render/HUD bridge while depending on
+the platform-neutral protocol core package.
+
 Puerts/engine client platform:
 
 ```ts
@@ -576,8 +660,8 @@ export function createEngineTransport(): ClientTransport {
 
 The generated project should not include a fake production networking framework.
 
-`snapscript new` includes an in-memory test transport and `src/transport/README.md`, but the default
-architecture should say clearly:
+`create-snapscript` includes an in-memory test transport and `src/transport/README.md`, but the
+default architecture should say clearly:
 
 - production reliability belongs to the engine/platform layer
 - SnapScript adapters only move `Uint8Array` packets with channel labels
@@ -607,6 +691,50 @@ export function moveDisabledEvent(world: ClientWorld, ctx: RpcCtx<MoveDisabledPa
 The CLI should avoid generating both class and function variants in the same project. One default
 style keeps examples and docs consistent.
 
+## CLI Reporting
+
+`snapscript generate` should print a small, stable report:
+
+```txt
+generated src/generated/snapscript/protocol.ts
+generated src/generated/snapscript/manifest.json
+generated src/generated/snapscript/rpc.ts
+generated src/systems/generated/server.ts
+generated src/systems/generated/client.ts
+created   src/rpc/server/move.command.ts
+stale     src/rpc/server/old-command.command.ts
+```
+
+Meaning:
+
+- `generated`: overwritten generated file
+- `created`: user-owned stub created because it did not exist
+- `kept`: user-owned file already existed and was not touched
+- `stale`: user-owned RPC logic file no longer referenced by current `.snap`
+
+Stale files are warnings, not errors. They should make schema drift visible without deleting user
+code.
+
+## Formatting
+
+Generated files should be deterministic and readable without requiring Prettier in the target
+project. User-owned files are not reformatted by `snapscript generate`.
+
+## Core Test Fixture
+
+Generated core packages should include one minimal test using the in-memory transport:
+
+- create server and client worlds
+- tick through hello/full snapshot
+- send one command from client to server
+- verify client receives replicated state
+- verify `client.myPeerId()`
+- verify ownership with `client.isMine(entity)`
+- verify at least one `WorldEntity` global state component if the default schema includes one
+
+The test is not a gameplay test suite. It is a smoke test that proves the generated project wiring,
+transport boundary, RPC binding, snapshot sync, and ownership defaults work together.
+
 ## Listen-Server Scenario
 
 Do not introduce a third public world type for listen-server or local-host play.
@@ -621,8 +749,9 @@ Confirmed defaults:
 
 - runtime package: `snapscript`
 - CLI package: `snapscript-cli`
+- project init package: `create-snapscript`
 - CLI binary: `snapscript`
-- project init: `snapscript new <name>` generates a platform-neutral game core package
+- project init: `npm create snapscript@latest <name>` generates a platform-neutral game core package
 - source schema: root `game.snap`
 - no generated lock file
 - declaration order and field order are generated id sources
@@ -640,12 +769,11 @@ Confirmed defaults:
 - generated files are overwritten
 - user logic files are create-only
 - system files export `register(world)`
+- generated RPC registry imports user logic directly
+- no user-maintained RPC or system barrel files by default
+- `snapscript generate` reports stale RPC logic and never deletes it
+- generated projects include a minimal in-memory round-trip test
 
 Items still needing implementation detail:
 
-- exact `snapscript new` template files
-- whether generated RPC registration imports user logic directly or uses an index barrel
-- how stale logic/system files are reported
-- whether `generate` should format generated code
-- whether to include a minimal test fixture in generated projects
-- exact platform integration examples for puerts, Node, and browser packages
+- exact platform integration examples for puerts and Node packages

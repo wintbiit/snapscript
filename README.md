@@ -10,6 +10,12 @@ It gives a server process one authoritative world and gives clients replicated r
 pnpm add snapscript
 ```
 
+For a new `.snap`-driven core package, use the npm create package:
+
+```sh
+npm create snapscript@latest my-game-core
+```
+
 The package is currently private in this repository. For local development, use the workspace scripts:
 
 ```sh
@@ -317,13 +323,17 @@ Definitions are frozen and fail fast:
 Handwritten definitions are still the runtime foundation. For larger projects, `.snap` files provide a declaration-first workflow that generates the same runtime calls plus typed RPC helpers:
 
 ```sh
+npm create snapscript@latest my-game-core
 snapscript check examples/protocol/game.snap
-snapscript generate examples/protocol/game.snap --out examples/protocol/core/src/generated/snapscript
+pnpm --dir examples/protocol/core generate
 ```
 
-`generate` writes generated TypeScript protocol/RPC bindings and a manifest. The project-style target
-uses `.snap` declaration order and field order as the generated id source; reordering is a breaking
-protocol change. See [docs/protocol-idl.md](docs/protocol-idl.md) and [examples/protocol/game.snap](examples/protocol/game.snap).
+`create-snapscript` initializes a platform-neutral game core package. `snapscript generate` then
+writes generated TypeScript protocol/RPC bindings, system registries, create-only RPC stubs, and a
+manifest from the core package root. The project-style target uses `.snap` declaration order and
+field order as the generated id source; reordering is a breaking protocol change. See
+[docs/protocol-idl.md](docs/protocol-idl.md), [docs/snapscript-project-style.md](docs/snapscript-project-style.md),
+and [examples/protocol/game.snap](examples/protocol/game.snap).
 
 ## RPC
 

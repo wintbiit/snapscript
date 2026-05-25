@@ -14,7 +14,9 @@ export const Health = defineComponent("Health", { hp: u16(100) }, { id: 2, field
 export const Player = defineEntity("Player", { position: Position, health: Health }, { id: 1 });
 
 export const MovementMove = defineCommand("Movement.Move", { dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }), dy: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }) }, { id: 1, fieldIds: {"dx":0,"dy":1}, channel: "unreliable" });
+export type MovementMovePayload = RpcPayload<typeof MovementMove>;
 export const MovementMoveDisabled = defineEvent("Movement.MoveDisabled", { disabled: bool(false) }, { id: 2, fieldIds: {"disabled":0}, channel: "reliable" });
+export type MovementMoveDisabledPayload = RpcPayload<typeof MovementMoveDisabled>;
 
 export const protocol = defineProtocol({
   components: { Position, Health },

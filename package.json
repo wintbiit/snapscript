@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "bench": "vitest run test/benchmark.test.ts test/benchmark-examples.test.ts test/benchmark-memory.test.ts --reporter=verbose",
-    "build": "pnpm --filter snapscript build && pnpm --filter snapscript-cli build",
+    "build": "pnpm --filter snapscript build && pnpm --filter snapscript-cli build && pnpm --filter create-snapscript build",
     "example:ecs:build": "pnpm --dir examples/ecs build",
     "example:ecs:dev": "pnpm --dir examples/ecs dev",
     "example:protocol:build": "pnpm build && pnpm --dir examples/protocol build",

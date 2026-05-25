@@ -2,94 +2,110 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import peggy from "peggy";
 
-type Channel = "reliable" | "unreliable";
-type Decl = StructDecl | ComponentDecl | EntityDecl | ServiceDecl;
+export type Channel = "reliable" | "unreliable";
+export type Decl = StructDecl | ComponentDecl | EntityDecl | ServiceDecl;
 
-interface SnapAst {
+export interface SnapAst {
   readonly syntax: "v1";
   readonly declarations: readonly Decl[];
 }
 
-interface StructDecl {
+export interface StructDecl {
   readonly kind: "struct";
   readonly name: string;
   readonly body: readonly ComponentItem[];
 }
 
-interface ComponentDecl {
+export interface ComponentDecl {
   readonly kind: "component";
   readonly name: string;
   readonly body: readonly ComponentItem[];
 }
 
-interface EntityDecl {
+export interface EntityDecl {
   readonly kind: "entity";
   readonly name: string;
   readonly components: readonly EntityItem[];
 }
 
-interface ServiceDecl {
+export interface ServiceDecl {
   readonly kind: "service";
   readonly name: string;
   readonly rpcs: readonly RpcItem[];
 }
 
-type ComponentItem = FieldItem | StructSpread;
+export type ComponentItem = FieldItem | StructSpread;
 
-interface FieldItem {
+export interface FieldItem {
   readonly kind: "field";
   readonly name: string;
   readonly type: TypeExpr;
 }
 
-interface StructSpread {
+export interface StructSpread {
   readonly kind: "spread";
   readonly name: string;
 }
 
-interface EntityItem {
+export interface EntityItem {
   readonly name: string;
   readonly component: string;
 }
 
-interface RpcItem {
+export interface RpcItem {
   readonly kind: "command" | "event";
   readonly name: string;
   readonly args: readonly FieldItem[];
   readonly channel: Channel;
 }
 
-interface TypeExpr {
+export interface TypeExpr {
   readonly name: string;
   readonly args: readonly Arg[];
 }
 
-interface Arg {
+export interface Arg {
   readonly name?: string;
   readonly value: string | number | boolean;
 }
 
-interface Manifest {
+export interface Manifest {
   readonly components?: Record<string, LockedDef>;
   readonly entities?: Record<string, LockedDef>;
   readonly commands?: Record<string, LockedDef>;
   readonly events?: Record<string, LockedDef>;
 }
 
-interface LockedDef {
+export interface LockedDef {
   readonly id: number;
   readonly fields?: Record<string, number>;
 }
 
-interface GeneratedFile {
+export interface GeneratedFile {
   readonly path: string;
   readonly content: string;
 }
 
-interface GenerateOptions {
+export interface GenerateOptions {
   readonly inputPath: string;
   readonly outDir?: string;
   readonly write?: boolean;
+}
+
+export interface SnapRpcModel {
+  readonly kind: "command" | "event";
+  readonly serviceName: string;
+  readonly rpcName: string;
+  readonly runtimeName: string;
+  readonly exportName: string;
+  readonly payloadTypeName: string;
+}
+
+export interface SnapModel {
+  readonly ast: SnapAst;
+  readonly manifest: Required<Manifest>;
+  readonly commands: readonly SnapRpcModel[];
+  readonly events: readonly SnapRpcModel[];
 }
 
 const grammar = String.raw`
@@ -135,6 +151,29 @@ export function checkSnap(source: string): SnapAst {
   const ast = parseSnap(source);
   validateAst(ast);
   return ast;
+}
+
+export function analyzeSnap(source: string): SnapModel {
+  const ast = checkSnap(source);
+  const manifest = buildManifest(ast);
+  const context = buildContext(ast);
+  const commands: SnapRpcModel[] = [];
+  const events: SnapRpcModel[] = [];
+  for (const service of context.services.values()) {
+    for (const rpc of service.rpcs) {
+      const model = {
+        kind: rpc.kind,
+        serviceName: service.name,
+        rpcName: rpc.name,
+        runtimeName: `${service.name}.${rpc.name}`,
+        exportName: `${service.name}${rpc.name}`,
+        payloadTypeName: `${service.name}${rpc.name}Payload`,
+      } as const;
+      if (rpc.kind === "command") commands.push(model);
+      else events.push(model);
+    }
+  }
+  return { ast, manifest, commands, events };
 }
 
 export function generateSnap(source: string, options: GenerateOptions): readonly GeneratedFile[] {
@@ -355,6 +394,7 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
       const collection = rpc.kind === "command" ? commandNames : eventNames;
       collection.push(exportName);
       lines.push(`export const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs))}, { id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
+      lines.push(`export type ${exportName}Payload = RpcPayload<typeof ${exportName}>;`);
     }
   }
   if (commandNames.length + eventNames.length > 0) lines.push("");

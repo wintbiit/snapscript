@@ -15,7 +15,8 @@
     "skipLibCheck": true,
     "paths": {
       "snapscript": ["./packages/snapscript/src/index.ts"],
-      "snapscript-cli": ["./packages/snapscript-cli/src/cli.ts"]
+      "snapscript-cli": ["./packages/snapscript-cli/src/cli.ts"],
+      "snapscript-cli/project": ["./packages/snapscript-cli/src/project.ts"]
     }
   },
   "include": ["packages", "test", "vitest.config.ts"]
