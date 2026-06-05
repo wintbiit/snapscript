@@ -5,9 +5,9 @@ import {
   type Clock,
   type Logger,
 } from "snapscript";
-import { protocol } from "./generated/snapscript/protocol";
-import { registerClientRpc } from "./generated/snapscript/rpc";
-import { registerClientSystems } from "./systems/generated/client";
+import { protocol } from "./generated/protocol";
+import { registerClientRpc } from "./generated/register";
+import { registerClientSystems } from "./generated/systems.client";
 
 export interface CreateClientOptions {
   readonly transport: ClientTransport;

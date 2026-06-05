@@ -1,8 +1,49 @@
 {
   "enums": {},
   "components": {
-    "Position": {
+    "MatchState": {
       "id": 1,
+      "fields": {
+        "phase": 0,
+        "timeLeftMs": 1
+      },
+      "types": {
+        "phase": {
+          "name": "u8",
+          "args": [
+            {
+              "value": 0
+            }
+          ]
+        },
+        "timeLeftMs": {
+          "name": "u32",
+          "args": [
+            {
+              "value": 0
+            }
+          ]
+        }
+      }
+    },
+    "ConnectionInfo": {
+      "id": 2,
+      "fields": {
+        "region": 0
+      },
+      "types": {
+        "region": {
+          "name": "u8",
+          "args": [
+            {
+              "value": 0
+            }
+          ]
+        }
+      }
+    },
+    "Position": {
+      "id": 3,
       "fields": {
         "x": 0,
         "y": 1,
@@ -63,7 +104,7 @@
       }
     },
     "Health": {
-      "id": 2,
+      "id": 4,
       "fields": {
         "hp": 0
       },
@@ -79,14 +120,42 @@
       }
     }
   },
+  "endpoints": {
+    "World": {
+      "components": {
+        "state": "MatchState"
+      }
+    },
+    "Peer": {
+      "components": {
+        "connectionInfo": "ConnectionInfo"
+      }
+    },
+    "Player": {
+      "components": {
+        "position": "Position",
+        "health": "Health"
+      }
+    }
+  },
   "entities": {
     "Player": {
       "id": 1
     }
   },
   "commands": {
-    "Movement.Move": {
+    "World.StartGame": {
       "id": 1,
+      "fields": {},
+      "types": {}
+    },
+    "Peer.Ready": {
+      "id": 3,
+      "fields": {},
+      "types": {}
+    },
+    "Player.Move": {
+      "id": 5,
       "fields": {
         "dx": 0,
         "dy": 1
@@ -138,8 +207,29 @@
     }
   },
   "events": {
-    "Movement.MoveDisabled": {
+    "World.GameStarted": {
       "id": 2,
+      "fields": {},
+      "types": {}
+    },
+    "Peer.Alert": {
+      "id": 4,
+      "fields": {
+        "reason": 0
+      },
+      "types": {
+        "reason": {
+          "name": "u8",
+          "args": [
+            {
+              "value": 0
+            }
+          ]
+        }
+      }
+    },
+    "Player.MoveDisabled": {
+      "id": 6,
       "fields": {
         "disabled": 0
       },

@@ -24,6 +24,43 @@ export interface ServerTransport {
   peers?(): Iterable<PeerRef>;
 }
 
+/** Local in-memory transport pair for tests, host-mode wiring, and examples. */
+export interface MemoryTransportPair {
+  readonly server: ServerTransport;
+  readonly client: ClientTransport;
+}
+
+export function createMemoryTransportPair(): MemoryTransportPair {
+  const peer: PeerRef = "memory-client";
+  let serverHandler: ((peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void) | undefined;
+  let clientHandler: ((channel: ChannelName, bytes: Uint8Array) => void) | undefined;
+
+  return {
+    server: {
+      send(_peer, channel, bytes) {
+        clientHandler?.(channel, bytes);
+      },
+      broadcast(channel, bytes) {
+        clientHandler?.(channel, bytes);
+      },
+      onPacket(cb) {
+        serverHandler = cb;
+      },
+      peers() {
+        return [peer];
+      },
+    },
+    client: {
+      send(channel, bytes) {
+        serverHandler?.(peer, channel, bytes);
+      },
+      onPacket(cb) {
+        clientHandler = cb;
+      },
+    },
+  };
+}
+
 /** Clock used by a world to produce frame timing and monotonically increasing network ticks. */
 export interface Clock {
   nowMs(): number;

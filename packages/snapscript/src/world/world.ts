@@ -7,10 +7,15 @@ import type {
   Logger,
   PeerRef,
 } from "../platform/index";
+import { PeerState, PeerStatus, type PeerStatusValue } from "../peer/index";
 import { isProtocolDefinition, registryForProtocol, type ProtocolDefinition } from "../protocol/index";
 import type {
   CommandDefinition,
+  CommandHandler,
+  CommandValidator,
   EventDefinition,
+  EventHandler,
+  EventValidator,
   RpcDefinition,
   RpcHandler,
 } from "../rpc/index";
@@ -381,6 +386,10 @@ export interface ClientWorldOptions {
  * work with either a server world or a client world without gaining mutation authority.
  */
 export interface ReplicatedStateReader {
+  /** Reads a world-level component from the reserved `WorldEntity`. */
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads a single component or a simple prefab primary component as read-only replicated state. */
   get<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
@@ -441,6 +450,9 @@ class WorldCore implements QueryWorldAccess {
   readonly #readonlyEntityRefs = new Map<number, ReadonlyEntityRef>();
   readonly #owners = new Map<number, PeerId>();
   readonly #ownedEntities = new Map<PeerId, Set<number>>();
+  readonly #peerEntities = new Map<PeerId, number>();
+  readonly #peerIdsByEntity = new Map<number, PeerId>();
+  readonly #peerStatuses = new Map<PeerId, PeerStatusValue>();
   readonly #readonlyComponents = new WeakMap<
     ComponentInstance<FieldDefinitions>,
     ReadonlyComponentInstance<FieldDefinitions>
@@ -622,6 +634,12 @@ class WorldCore implements QueryWorldAccess {
     return this.get(entity, componentOrPrefab as ComponentSchema<FieldDefinitions>);
   }
 
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ComponentInstance<TFields> | undefined {
+    return this.get(WorldEntity, component);
+  }
+
   getReadonly<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
@@ -646,6 +664,12 @@ class WorldCore implements QueryWorldAccess {
     this.#assertComponentInProtocol(componentOrPrefab, "get");
     const record = this.#storage.get(entityId, componentOrPrefab.schemaId);
     return record === undefined ? undefined : this.#readonlyComponent(record.instance);
+  }
+
+  getComponentReadonly<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined {
+    return this.getReadonly(WorldEntity, component);
   }
 
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
@@ -741,10 +765,10 @@ class WorldCore implements QueryWorldAccess {
     return this.#owners.get(entityId) ?? ServerPeerId;
   }
 
-  setOwner(entity: number | EntityRef, peerId: PeerId): void {
+  setOwner(entity: number | EntityRef, peer: PeerId | ReadonlyEntityRef): void {
     const entityId = entityIdFrom(entity, "world.setOwner()");
+    const peerId = this.#peerIdFromPeer(peer, "world.setOwner()");
     this.#assertEntityExists(entityId, "world.setOwner()");
-    assertPeerId(peerId, "world.setOwner()");
     if (entityId === WorldEntity.id) {
       throw new Error("world.setOwner() cannot change WorldEntity ownership");
     }
@@ -760,18 +784,77 @@ class WorldCore implements QueryWorldAccess {
     this.setOwner(entity, ServerPeerId);
   }
 
-  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
-    assertPeerId(peerId, "world.isOwner()");
+  isOwner(peer: PeerId | ReadonlyEntityRef, entity: number | ReadonlyEntityRef): boolean {
+    const peerId = this.#peerIdFromPeer(peer, "world.isOwner()");
     return this.ownerOf(entity) === peerId;
   }
 
-  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[] {
-    assertPeerId(peerId, "world.ownedBy()");
+  ownedBy(peer: PeerId | ReadonlyEntityRef): readonly ReadonlyEntityRef[] {
+    const peerId = this.#peerIdFromPeer(peer, "world.ownedBy()");
     const ids =
       peerId === ServerPeerId
         ? this.#storage.entityIds().filter((entityId) => this.ownerOf(entityId) === ServerPeerId)
         : [...(this.#ownedEntities.get(peerId) ?? [])].sort((a, b) => a - b);
     return ids.map((entityId) => this.#readonlyEntityRef(entityId));
+  }
+
+  peerId(peer: ReadonlyEntityRef): PeerId {
+    const entityId = entityIdFrom(peer, "world.peerId()");
+    const peerId = this.#peerIdsByEntity.get(entityId);
+    if (peerId === undefined) {
+      throw new Error("world.peerId() requires a PeerEntity ref");
+    }
+    return peerId;
+  }
+
+  peerStatus(peer: ReadonlyEntityRef): PeerStatusValue {
+    return this.#peerStatuses.get(this.peerId(peer)) ?? PeerStatus.Disconnected;
+  }
+
+  peerEntity(peerId: PeerId): ReadonlyEntityRef | undefined {
+    assertPeerId(peerId, "world.peerEntity()");
+    const entityId = this.#peerEntities.get(peerId);
+    return entityId === undefined ? undefined : this.#readonlyEntityRef(entityId);
+  }
+
+  ensurePeerEntity(peerId: PeerId): EntityRef {
+    assertPeerId(peerId, "world peer");
+    const existing = this.#peerEntities.get(peerId);
+    if (existing !== undefined) {
+      this.#setPeerStatus(peerId, PeerStatus.Connected);
+      return this.#entityRef(existing);
+    }
+
+    const peerPrefab = this.#protocol.prefabs.Peer;
+    const entity =
+      peerPrefab === undefined
+        ? this.entity()
+        : this.spawn(peerPrefab, {
+            peerState: {
+              peerId,
+              status: PeerStatus.Connected,
+            },
+          } as never);
+    const entityId = entityIdFrom(entity, "world peer");
+    this.#peerEntities.set(peerId, entityId);
+    this.#peerIdsByEntity.set(entityId, peerId);
+    this.#peerStatuses.set(peerId, PeerStatus.Connected);
+    this.#setOwnerInternal(entityId, peerId);
+    this.dirty.markNetworkChanged(entityId);
+    return this.#entityRef(entityId);
+  }
+
+  registerPeerEntity(peerId: PeerId, peerEntityId: number): void {
+    assertPeerId(peerId, "world peer");
+    assertEntityId(peerEntityId, "world peer");
+    this.#peerEntities.set(peerId, peerEntityId);
+    this.#peerIdsByEntity.set(peerEntityId, peerId);
+    this.#peerStatuses.set(peerId, PeerStatus.Connected);
+  }
+
+  markPeerDisconnected(peerId: PeerId): void {
+    assertPeerId(peerId, "world peer");
+    this.#setPeerStatus(peerId, PeerStatus.Disconnected);
   }
 
   query<TComponents extends ComponentQuery>(
@@ -1112,6 +1195,18 @@ class WorldCore implements QueryWorldAccess {
     this.#ownedEntities.set(peerId, entities);
   }
 
+  #setPeerStatus(peerId: PeerId, status: PeerStatusValue): void {
+    this.#peerStatuses.set(peerId, status);
+    const entityId = this.#peerEntities.get(peerId);
+    if (entityId === undefined) {
+      return;
+    }
+    const peerState = this.#storage.get(entityId, PeerState.schemaId)?.instance;
+    if (peerState?.status !== undefined) {
+      peerState.status.value = status;
+    }
+  }
+
   #clearOwnerInternal(entityId: number): void {
     const previous = this.#owners.get(entityId);
     if (previous === undefined) {
@@ -1123,6 +1218,14 @@ class WorldCore implements QueryWorldAccess {
     if (entities?.size === 0) {
       this.#ownedEntities.delete(previous);
     }
+  }
+
+  #peerIdFromPeer(peer: PeerId | ReadonlyEntityRef, label: string): PeerId {
+    if (typeof peer === "number") {
+      return peerIdFrom(peer, label);
+    }
+    const entityId = entityIdFrom(peer, label);
+    return this.#peerIdsByEntity.get(entityId) ?? entityId;
   }
 
   #entityRef(entityId: number): EntityRef {
@@ -1548,6 +1651,10 @@ export interface ServerWorld {
         : never;
     }>,
   ): PrefabInstance<TComponents>;
+  /** Reads a world-level component from the reserved `WorldEntity`. */
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ComponentInstance<TFields> | undefined;
   /** Reads a component or simple prefab primary component from an entity. */
   get<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
@@ -1566,13 +1673,17 @@ export interface ServerWorld {
   /** Returns the owner peer id for an entity. Server-owned entities return `0`. */
   ownerOf(entity: number | ReadonlyEntityRef): PeerId;
   /** Sets server-authoritative owner metadata for an entity. */
-  setOwner(entity: number | EntityRef, peerId: PeerId): void;
+  setOwner(entity: number | EntityRef, peer: PeerId | ReadonlyEntityRef): void;
   /** Sets an entity back to server ownership. */
   clearOwner(entity: number | EntityRef): void;
   /** Returns whether a peer owns an entity. */
-  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean;
+  isOwner(peer: PeerId | ReadonlyEntityRef, entity: number | ReadonlyEntityRef): boolean;
   /** Returns read-only refs for entities currently owned by a peer. */
-  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[];
+  ownedBy(peer: PeerId | ReadonlyEntityRef): readonly ReadonlyEntityRef[];
+  /** Returns the numeric peer id represented by a PeerEntity ref. */
+  peerId(peer: ReadonlyEntityRef): PeerId;
+  /** Returns the built-in connection status for a PeerEntity ref. */
+  peerStatus(peer: ReadonlyEntityRef): PeerStatusValue;
   /** Removes a component or every component in a prefab from an entity. */
   remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean;
   /** Destroys an entity and all component rows attached to it. */
@@ -1595,6 +1706,12 @@ export interface ServerWorld {
     rpc: CommandDefinition<TFields>,
     handler: RpcHandler<TFields>,
   ): () => void;
+  /** Handles an endpoint-addressed client-to-server command. */
+  onCommand<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    handler: CommandHandler<TFields>,
+    validator?: CommandValidator<TFields>,
+  ): () => void;
   /** Broadcasts a server-to-client event. */
   broadcast<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
@@ -1603,6 +1720,30 @@ export interface ServerWorld {
   /** Sends a server-to-client event to one peer id. */
   sendTo<TFields extends FieldDefinitions>(
     peerId: PeerId,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Broadcasts an endpoint-addressed event to every connected peer. */
+  broadcastEvent<TFields extends FieldDefinitions>(
+    source: number | ReadonlyEntityRef,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Sends an endpoint-addressed event to one or more PeerEntity refs. */
+  sendEventTo<TFields extends FieldDefinitions>(
+    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    source: number | ReadonlyEntityRef,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Sends a peer endpoint event whose source is each receiving PeerEntity. */
+  sendPeerEventTo<TFields extends FieldDefinitions>(
+    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  /** Broadcasts a peer endpoint event to every connected peer using each PeerEntity as source/target. */
+  broadcastPeerEvent<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
@@ -1722,6 +1863,12 @@ class ServerWorldImpl implements ServerWorld {
     return this.#core.getAny(entity, componentOrPrefab);
   }
 
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ComponentInstance<TFields> | undefined {
+    return this.#core.getComponent(component);
+  }
+
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
     entity: number | ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
@@ -1740,20 +1887,36 @@ class ServerWorldImpl implements ServerWorld {
     return this.#core.ownerOf(entity);
   }
 
-  setOwner(entity: number | EntityRef, peerId: PeerId): void {
-    this.#core.setOwner(entity, peerId);
+  setOwner(entity: number | EntityRef, peer: PeerId | ReadonlyEntityRef): void {
+    this.#core.setOwner(entity, peer);
   }
 
   clearOwner(entity: number | EntityRef): void {
     this.#core.clearOwner(entity);
   }
 
-  isOwner(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
-    return this.#core.isOwner(peerId, entity);
+  isOwner(peer: PeerId | ReadonlyEntityRef, entity: number | ReadonlyEntityRef): boolean {
+    return this.#core.isOwner(peer, entity);
   }
 
-  ownedBy(peerId: PeerId): readonly ReadonlyEntityRef[] {
-    return this.#core.ownedBy(peerId);
+  ownedBy(peer: PeerId | ReadonlyEntityRef): readonly ReadonlyEntityRef[] {
+    return this.#core.ownedBy(peer);
+  }
+
+  peerId(peer: ReadonlyEntityRef): PeerId {
+    return this.#core.peerId(peer);
+  }
+
+  peerStatus(peer: ReadonlyEntityRef): PeerStatusValue {
+    return this.#core.peerStatus(peer);
+  }
+
+  _ensurePeerEntity(peerId: PeerId): EntityRef {
+    return this.#core.ensurePeerEntity(peerId);
+  }
+
+  _markPeerDisconnected(peerId: PeerId): void {
+    this.#core.markPeerDisconnected(peerId);
   }
 
   remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
@@ -1803,6 +1966,15 @@ class ServerWorldImpl implements ServerWorld {
     return this.#runtime.on(rpc, handler);
   }
 
+  onCommand<TFields extends FieldDefinitions>(
+    rpc: CommandDefinition<TFields>,
+    handler: CommandHandler<TFields>,
+    validator?: CommandValidator<TFields>,
+  ): () => void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ServerWorld.onCommand");
+    return this.#runtime.onCommand(rpc, handler, validator);
+  }
+
   broadcast<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
@@ -1819,6 +1991,46 @@ class ServerWorldImpl implements ServerWorld {
     assertPeerId(peerId, "ServerWorld.sendTo()");
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.sendTo");
     this.#runtime.sendTo(peerId, rpc, payload);
+  }
+
+  broadcastEvent<TFields extends FieldDefinitions>(
+    source: number | ReadonlyEntityRef,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    const sourceId = entityIdFrom(source, "ServerWorld.broadcastEvent()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.broadcastEvent");
+    this.#runtime.broadcastEvent(sourceId, rpc, payload);
+  }
+
+  sendEventTo<TFields extends FieldDefinitions>(
+    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    source: number | ReadonlyEntityRef,
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    const peerTargets = peerEventTargets(this.#core, targets, "ServerWorld.sendEventTo()");
+    const sourceId = entityIdFrom(source, "ServerWorld.sendEventTo()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.sendEventTo");
+    this.#runtime.sendEventTo(peerTargets, sourceId, rpc, payload);
+  }
+
+  sendPeerEventTo<TFields extends FieldDefinitions>(
+    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    const peerTargets = peerEventTargets(this.#core, targets, "ServerWorld.sendPeerEventTo()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.sendPeerEventTo");
+    this.#runtime.sendPeerEventTo(peerTargets, rpc, payload);
+  }
+
+  broadcastPeerEvent<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.broadcastPeerEvent");
+    this.#runtime.broadcastPeerEvent(rpc, payload);
   }
 
   sendFullSnapshot(peer?: PeerRef): void {
@@ -1872,6 +2084,9 @@ class ServerWorldImpl implements ServerWorld {
     if (entityId === WorldEntity.id) {
       return true;
     }
+    if (this.#core.ownerOf(entityId) === peerId) {
+      return true;
+    }
     const override = this.#visibility.get(peerId)?.get(entityId);
     if (override !== undefined) {
       return override;
@@ -1909,6 +2124,7 @@ class ServerWorldImpl implements ServerWorld {
 
   #createInterestWorld(): InterestWorld {
     return Object.freeze({
+      getComponent: (component) => this.#core.getComponentReadonly(component),
       get: (entity, componentOrPrefab) => this.#core.getReadonly(entity, componentOrPrefab),
       getPrefab: (entity, prefab) => this.#core.getPrefabReadonly(entity, prefab),
       has: (entity, componentOrPrefab) => this.#core.has(entity, componentOrPrefab),
@@ -1921,6 +2137,10 @@ class ServerWorldImpl implements ServerWorld {
 
 /** Replicated client world handle. Clients read state, run client systems, send commands, and receive events. */
 export interface ClientWorld {
+  /** Reads a world-level replicated component from the reserved `WorldEntity`. */
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads a replicated component or simple prefab primary component. */
   get<TFields extends FieldDefinitions>(
     entity: number | ReadonlyEntityRef,
@@ -1940,6 +2160,12 @@ export interface ClientWorld {
   ownerOf(entity: number | ReadonlyEntityRef): PeerId;
   /** Returns this client's assigned peer id, or `0` before assignment. */
   myPeerId(): PeerId;
+  /** Returns this client's PeerEntity ref. */
+  myPeerEntity(): ReadonlyEntityRef;
+  /** Returns the numeric peer id represented by a PeerEntity ref. */
+  peerId(peer: ReadonlyEntityRef): PeerId;
+  /** Returns the built-in connection status for a PeerEntity ref. */
+  peerStatus(peer: ReadonlyEntityRef): PeerStatusValue;
   /** Returns whether this client owns an entity. */
   isMine(entity: number | ReadonlyEntityRef): boolean;
   /** Creates a lazy read-only query over one or more components. */
@@ -1960,10 +2186,22 @@ export interface ClientWorld {
     rpc: CommandDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
+  /** Sends an endpoint-addressed client-to-server command. */
+  sendCommand<TFields extends FieldDefinitions>(
+    target: number | ReadonlyEntityRef,
+    rpc: CommandDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
   /** Handles a server-to-client event. */
   on<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     handler: RpcHandler<TFields>,
+  ): () => void;
+  /** Handles an endpoint-addressed server-to-client event. */
+  onEvent<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    handler: EventHandler<TFields>,
+    validator?: EventValidator<TFields>,
   ): () => void;
   /** Registers a post-apply snapshot callback. The returned function unregisters it. */
   onSnapshot(handler: SnapshotHandler<ClientWorld>): () => void;
@@ -2015,6 +2253,12 @@ class ClientWorldImpl implements ClientWorld {
     );
   }
 
+  getComponent<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields>,
+  ): ReadonlyComponentInstance<TFields> | undefined {
+    return this.#core.getComponentReadonly(component);
+  }
+
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
     entity: number | ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
@@ -2035,6 +2279,22 @@ class ClientWorldImpl implements ClientWorld {
 
   myPeerId(): PeerId {
     return this.#runtime.peerId();
+  }
+
+  myPeerEntity(): ReadonlyEntityRef {
+    return this.#assignedPeerEntity("ClientWorld.myPeerEntity()");
+  }
+
+  peerId(peer: ReadonlyEntityRef): PeerId {
+    return this.#core.peerId(peer);
+  }
+
+  peerStatus(peer: ReadonlyEntityRef): PeerStatusValue {
+    return this.#core.peerStatus(peer);
+  }
+
+  _assignPeerEntity(peerId: PeerId, peerEntityId: number): void {
+    this.#core.registerPeerEntity(peerId, peerEntityId);
   }
 
   isMine(entity: number | ReadonlyEntityRef): boolean {
@@ -2075,7 +2335,19 @@ class ClientWorldImpl implements ClientWorld {
     payload?: Partial<FieldValues<TFields>>,
   ): void {
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ClientWorld.send");
+    this.#assignedPeerEntity("ClientWorld.send()");
     this.#runtime.send(rpc, payload);
+  }
+
+  sendCommand<TFields extends FieldDefinitions>(
+    target: number | ReadonlyEntityRef,
+    rpc: CommandDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void {
+    const targetId = entityIdFrom(target, "ClientWorld.sendCommand()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ClientWorld.sendCommand");
+    this.#assignedPeerEntity("ClientWorld.sendCommand()");
+    this.#runtime.sendCommand(targetId, rpc, payload);
   }
 
   on<TFields extends FieldDefinitions>(
@@ -2084,6 +2356,15 @@ class ClientWorldImpl implements ClientWorld {
   ): () => void {
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ClientWorld.on");
     return this.#runtime.on(rpc, handler);
+  }
+
+  onEvent<TFields extends FieldDefinitions>(
+    rpc: EventDefinition<TFields>,
+    handler: EventHandler<TFields>,
+    validator?: EventValidator<TFields>,
+  ): () => void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ClientWorld.onEvent");
+    return this.#runtime.onEvent(rpc, handler, validator);
   }
 
   onSnapshot(handler: SnapshotHandler<ClientWorld>): () => void {
@@ -2098,6 +2379,15 @@ class ClientWorldImpl implements ClientWorld {
 
   requestFullSnapshot(): void {
     this.#runtime.requestFullSnapshot();
+  }
+
+  #assignedPeerEntity(label: string): ReadonlyEntityRef {
+    const peerId = this.myPeerId();
+    const peerEntity = this.#core.peerEntity(peerId);
+    if (peerId === ServerPeerId || peerEntity === undefined) {
+      throw new Error(`${label} cannot send commands before peer assignment`);
+    }
+    return peerEntity;
   }
 
   #notifySnapshot(context: SnapshotContext): void {
@@ -2154,6 +2444,8 @@ function serverRuntimeOptions(
     logger: options.logger ?? defaultLogger,
     isVisible: (peer, entityId) => world.isVisible(peer, entityId),
     canReusePeerSnapshots,
+    ensurePeerEntity: (peerId) => (world as ServerWorldImpl)._ensurePeerEntity(peerId).id,
+    markPeerDisconnected: (peerId) => (world as ServerWorldImpl)._markPeerDisconnected(peerId),
     snapshotEncoding: options.snapshotEncoding ?? "default",
   };
 }
@@ -2173,6 +2465,7 @@ function clientRuntimeOptions(
     ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
     onSnapshot,
+    assignPeerEntity: (peerId, peerEntityId) => (world as ClientWorldImpl)._assignPeerEntity(peerId, peerEntityId),
   };
 }
 
@@ -2448,6 +2741,30 @@ function assertEntityId(entityId: number, label: string): void {
   }
 }
 
+function peerEventTargets(
+  core: WorldCore,
+  targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+  label: string,
+):
+  | { readonly peerId: PeerId; readonly peerEntityId: number }
+  | readonly { readonly peerId: PeerId; readonly peerEntityId: number }[] {
+  if (typeof targets !== "number" && Array.isArray(targets)) {
+    return targets.map((target) => peerEventTarget(core, target, label));
+  }
+  return peerEventTarget(core, targets as number | ReadonlyEntityRef, label);
+}
+
+function peerEventTarget(
+  core: WorldCore,
+  target: number | ReadonlyEntityRef,
+  label: string,
+): { readonly peerId: PeerId; readonly peerEntityId: number } {
+  if (typeof target === "number") {
+    return { peerId: peerIdFrom(target, label), peerEntityId: core.peerEntity(target)?.id ?? target };
+  }
+  return { peerId: core.peerId(target), peerEntityId: entityIdFrom(target, label) };
+}
+
 function assertPeerRef(peer: unknown, label: string): asserts peer is PeerRef {
   const kind = typeof peer;
   if (
@@ -2466,6 +2783,24 @@ function assertPeerId(peerId: unknown, label: string): asserts peerId is PeerId 
   if (typeof peerId !== "number" || !Number.isSafeInteger(peerId) || peerId < 0) {
     throw new Error(`${label} requires a non-negative integer peer id`);
   }
+}
+
+function peerIdFrom(peer: PeerId | ReadonlyEntityRef, label: string): PeerId {
+  if (typeof peer === "number") {
+    assertPeerId(peer, label);
+    return peer;
+  }
+  return entityIdFrom(peer, label);
+}
+
+function peerTargetIdsFrom(
+  targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+  label: string,
+): number | readonly number[] {
+  if (Array.isArray(targets)) {
+    return targets.map((target) => peerIdFrom(target, label));
+  }
+  return peerIdFrom(targets as number | ReadonlyEntityRef, label);
 }
 
 function assertChannelName(channel: unknown, label: string): asserts channel is ChannelName {

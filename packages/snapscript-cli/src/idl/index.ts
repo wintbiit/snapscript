@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import peggy from "peggy";
 
 export type Channel = "reliable" | "unreliable";
-export type Decl = ImportDecl | EnumDecl | StructDecl | ComponentDecl | EntityDecl | ServiceDecl;
+export type Decl = ImportDecl | EnumDecl | StructDecl | ComponentDecl | EndpointDecl | EntityDecl;
 
 export interface SnapAst {
   readonly syntax: "v1";
@@ -38,6 +38,17 @@ export interface EntityDecl {
   readonly kind: "entity";
   readonly name: string;
   readonly components: readonly EntityItem[];
+  readonly rpcs: readonly RpcItem[];
+}
+
+export type EndpointKind = "world" | "peer";
+
+export interface EndpointDecl {
+  readonly kind: "endpoint";
+  readonly endpoint: EndpointKind;
+  readonly name: "World" | "Peer";
+  readonly components: readonly EntityItem[];
+  readonly rpcs: readonly RpcItem[];
 }
 
 export interface ServiceDecl {
@@ -60,6 +71,7 @@ export interface StructSpread {
 }
 
 export interface EntityItem {
+  readonly kind: "component";
   readonly name: string;
   readonly component: string;
 }
@@ -84,6 +96,7 @@ export interface Arg {
 export interface Manifest {
   readonly enums?: Record<string, { readonly values: readonly string[] }>;
   readonly components?: Record<string, LockedDef>;
+  readonly endpoints?: Record<string, { readonly components: Record<string, string> }>;
   readonly entities?: Record<string, LockedDef>;
   readonly commands?: Record<string, LockedDef>;
   readonly events?: Record<string, LockedDef>;
@@ -108,11 +121,12 @@ export interface GenerateOptions {
 
 export interface SnapRpcModel {
   readonly kind: "command" | "event";
-  readonly serviceName: string;
+  readonly endpointName: string;
   readonly rpcName: string;
   readonly runtimeName: string;
   readonly exportName: string;
   readonly payloadTypeName: string;
+  readonly handlerPath: readonly string[];
 }
 
 export interface SnapModel {
@@ -129,18 +143,20 @@ const grammar = String.raw`
 
 Start = _ syntax:Syntax _ declarations:Declaration* _ { return { syntax, declarations }; }
 Syntax = "syntax" __ "=" __ q:StringLiteral _ { if (q !== "v1") throw new Error("Only syntax \"v1\" is supported"); return q; }
-Declaration = Import / Enum / Struct / Component / Entity / Service
+Declaration = Import / Enum / Struct / Component / World / Peer / Entity
 Import = "import" __ path:StringLiteral _ { return node("import", { path }); }
 Enum = "enum" __ name:Ident _ "{" _ values:EnumValue* "}" _ { return node("enum", { name, values }); }
 EnumValue = value:Ident _ { return value; }
 Struct = "struct" __ name:Ident _ "{" _ body:ComponentItem* "}" _ { return node("struct", { name, body }); }
 Component = "component" __ name:Ident _ "{" _ body:ComponentItem* "}" _ { return node("component", { name, body }); }
-Entity = "entity" __ name:Ident _ "{" _ components:EntityItem* "}" _ { return node("entity", { name, components }); }
-Service = "service" __ name:Ident _ "{" _ rpcs:RpcItem* "}" _ { return node("service", { name, rpcs }); }
+World = "world" _ "{" _ body:EndpointItem* "}" _ { return node("endpoint", { endpoint: "world", name: "World", components: body.filter((item) => item.kind === "component"), rpcs: body.filter((item) => item.kind !== "component") }); }
+Peer = "peer" _ "{" _ body:EndpointItem* "}" _ { return node("endpoint", { endpoint: "peer", name: "Peer", components: body.filter((item) => item.kind === "component"), rpcs: body.filter((item) => item.kind !== "component") }); }
+Entity = "entity" __ name:Ident _ "{" _ body:EndpointItem* "}" _ { return node("entity", { name, components: body.filter((item) => item.kind === "component"), rpcs: body.filter((item) => item.kind !== "component") }); }
+EndpointItem = RpcItem / EntityItem
 ComponentItem = FieldItem / SpreadItem
 SpreadItem = name:Ident _ { return node("spread", { name }); }
 FieldItem = name:Ident _ ":" _ type:TypeExpr _ { return node("field", { name, type }); }
-EntityItem = name:Ident _ ":" _ component:Ident _ { return { name, component }; }
+EntityItem = name:Ident _ ":" _ component:Ident _ { return { kind: "component", name, component }; }
 RpcItem = kind:("command" / "event") __ name:Ident _ "(" _ args:ArgList? _ ")" _ channel:("reliable" / "unreliable") _ {
   return { kind, name, args: args ?? [], channel };
 }
@@ -184,15 +200,16 @@ function modelFromContext(
 ): SnapModel {
   const commands: SnapRpcModel[] = [];
   const events: SnapRpcModel[] = [];
-  for (const service of context.services.values()) {
-    for (const rpc of service.rpcs) {
+  for (const endpoint of endpointsInOrder(context)) {
+    for (const rpc of endpoint.rpcs) {
       const model = {
         kind: rpc.kind,
-        serviceName: service.name,
+        endpointName: endpoint.name,
         rpcName: rpc.name,
-        runtimeName: `${service.name}.${rpc.name}`,
-        exportName: `${service.name}${rpc.name}`,
-        payloadTypeName: `${service.name}${rpc.name}Payload`,
+        runtimeName: `${endpoint.name}.${rpc.name}`,
+        exportName: `${endpoint.name}${rpc.name}`,
+        payloadTypeName: `${endpoint.name}${rpc.name}Payload`,
+        handlerPath: handlerPathFor(endpoint, rpc),
       } as const;
       if (rpc.kind === "command") commands.push(model);
       else events.push(model);
@@ -282,6 +299,14 @@ function validateAst(ast: SnapAst): void {
   const names = new Map<string, string>();
   for (const declaration of ast.declarations) {
     if (declaration.kind === "import") continue;
+    if (declaration.kind === "endpoint") {
+      const previous = names.get(declaration.name);
+      if (previous !== undefined) {
+        throw new Error(`Duplicate definition "${declaration.name}" used by ${previous} and ${declaration.kind}`);
+      }
+      names.set(declaration.name, declaration.kind);
+      continue;
+    }
     const previous = names.get(declaration.name);
     if (previous !== undefined) {
       throw new Error(`Duplicate definition "${declaration.name}" used by ${previous} and ${declaration.kind}`);
@@ -295,17 +320,33 @@ function buildContext(ast: SnapAst) {
   const enums = new Map<string, EnumDecl>();
   const structs = new Map<string, StructDecl>();
   const components = new Map<string, ComponentDecl>();
+  const endpoints = new Map<EndpointKind, EndpointDecl>();
   const entities = new Map<string, EntityDecl>();
-  const services = new Map<string, ServiceDecl>();
   for (const declaration of ast.declarations) {
     if (declaration.kind === "enum") enums.set(declaration.name, declaration);
     if (declaration.kind === "struct") structs.set(declaration.name, declaration);
     if (declaration.kind === "component") components.set(declaration.name, declaration);
+    if (declaration.kind === "endpoint") endpoints.set(declaration.endpoint, declaration);
     if (declaration.kind === "entity") entities.set(declaration.name, declaration);
-    if (declaration.kind === "service") services.set(declaration.name, declaration);
   }
   for (const component of components.values()) {
     expandComponentBody(component.body, structs, enums, [component.name]);
+  }
+  for (const endpoint of endpointsInAstOrder(ast)) {
+    for (const item of endpoint.components) {
+      if (!components.has(item.component)) {
+        throw new Error(`${endpoint.name} endpoint references unknown component "${item.component}"`);
+      }
+    }
+    for (const rpc of endpoint.rpcs) {
+      for (const arg of rpc.args) {
+        if (structs.has(arg.type.name)) {
+          expandComponentBody([{ kind: "spread", name: arg.type.name }], structs, enums, [endpoint.name, rpc.name]);
+        } else {
+          assertFieldType(arg.type.name, `${endpoint.name}.${rpc.name}.${arg.name}`, enums);
+        }
+      }
+    }
   }
   for (const entity of entities.values()) {
     for (const item of entity.components) {
@@ -313,14 +354,12 @@ function buildContext(ast: SnapAst) {
         throw new Error(`Entity "${entity.name}" references unknown component "${item.component}"`);
       }
     }
-  }
-  for (const service of services.values()) {
-    for (const rpc of service.rpcs) {
+    for (const rpc of entity.rpcs) {
       for (const arg of rpc.args) {
         if (structs.has(arg.type.name)) {
-          expandComponentBody([{ kind: "spread", name: arg.type.name }], structs, enums, [service.name, rpc.name]);
+          expandComponentBody([{ kind: "spread", name: arg.type.name }], structs, enums, [entity.name, rpc.name]);
         } else {
-          assertFieldType(arg.type.name, `${service.name}.${rpc.name}.${arg.name}`, enums);
+          assertFieldType(arg.type.name, `${entity.name}.${rpc.name}.${arg.name}`, enums);
         }
       }
     }
@@ -330,7 +369,24 @@ function buildContext(ast: SnapAst) {
       throw new Error(`Enum "${item.name}" must contain unique values`);
     }
   }
-  return { enums, structs, components, entities, services };
+  return { ast, enums, structs, components, endpoints, entities };
+}
+
+function endpointsInAstOrder(ast: SnapAst): readonly EndpointDecl[] {
+  return ast.declarations.filter((declaration): declaration is EndpointDecl => declaration.kind === "endpoint");
+}
+
+function endpointsInOrder(context: ReturnType<typeof buildContext>): readonly (EndpointDecl | EntityDecl)[] {
+  return context.ast.declarations.filter(
+    (declaration): declaration is EndpointDecl | EntityDecl =>
+      declaration.kind === "endpoint" || declaration.kind === "entity",
+  );
+}
+
+function handlerPathFor(endpoint: EndpointDecl | EntityDecl, rpc: RpcItem): readonly string[] {
+  return endpoint.kind === "endpoint"
+    ? ["logic", rpc.kind === "command" ? "server" : "client", `${endpoint.name}.ts`]
+    : ["logic", rpc.kind === "command" ? "server" : "client", `${endpoint.name}.ts`];
 }
 
 function expandComponentBody(
@@ -397,6 +453,7 @@ function buildManifest(ast: SnapAst): Required<Manifest> {
   const manifest: Required<Manifest> = {
     enums: {},
     components: {},
+    endpoints: {},
     entities: {},
     commands: {},
     events: {},
@@ -414,15 +471,20 @@ function buildManifest(ast: SnapAst): Required<Manifest> {
     };
     componentId += 1;
   }
+  for (const endpoint of endpointsInOrder(context)) {
+    manifest.endpoints[endpoint.name] = {
+      components: Object.fromEntries(endpoint.components.map((item) => [item.name, item.component])),
+    };
+  }
   let entityId = 1;
   for (const entity of context.entities.values()) {
     manifest.entities[entity.name] = { id: entityId };
     entityId += 1;
   }
   let rpcId = 1;
-  for (const service of context.services.values()) {
-    for (const rpc of service.rpcs) {
-      const name = `${service.name}.${rpc.name}`;
+  for (const endpoint of endpointsInOrder(context)) {
+    for (const rpc of endpoint.rpcs) {
+      const name = `${endpoint.name}.${rpc.name}`;
       const target = rpc.kind === "command" ? manifest.commands : manifest.events;
       target[name] = {
         id: rpcId,
@@ -474,8 +536,8 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
       collectHelpers(helpers, field.type, context.enums);
     }
   }
-  for (const service of context.services.values()) {
-    for (const rpc of service.rpcs) {
+  for (const endpoint of endpointsInOrder(context)) {
+    for (const rpc of endpoint.rpcs) {
       for (const field of expandRpcFields(rpc, context.structs, context.enums)) {
         collectHelpers(helpers, field.type, context.enums);
       }
@@ -483,12 +545,17 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
   }
   const protocolHash = hashManifest(manifest);
 
+  const needsPeerEntity = endpointsInOrder(context).some((endpoint) => endpoint.rpcs.length > 0) || context.endpoints.has("peer");
+  const runtimeImports = [...helpers, ...(needsPeerEntity ? ["PeerState"] : [])].sort();
   const lines: string[] = [
-    `import { ${[...helpers].sort().join(", ")} } from "snapscript";`,
-    `import type { ClientWorld, CommandDefinition, EventDefinition, FieldDefinitions, FieldValues, ServerWorld, PeerId, RpcHandler } from "snapscript";`,
+    `import { ${runtimeImports.join(", ")} } from "snapscript";`,
+    `import { WorldEntity } from "snapscript";`,
+    `import type { ClientWorld, CommandDefinition, CommandHandler, EventDefinition, EventHandler, FieldDefinitions, FieldValues, ReadonlyEntityRef, ServerWorld, ComponentSchema, PrefabDefinition } from "snapscript";`,
     "",
     `type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : never;`,
     `type RpcPayload<T> = FieldValues<RpcFields<T> & FieldDefinitions>;`,
+    `type EndpointValidationCtx = { readonly rpc: { readonly name: string }; readonly source?: ReadonlyEntityRef; readonly target?: ReadonlyEntityRef };`,
+    `type EndpointSpec = { readonly name: string; readonly ref: "source" | "target"; readonly entity?: PrefabDefinition | ComponentSchema; readonly world?: true };`,
     "",
   ];
   for (const item of context.enums.values()) {
@@ -505,36 +572,57 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
     lines.push(`export const ${component.name} = defineComponent(${JSON.stringify(component.name)}, ${emitFields(fields, context.enums)}, { id: ${manifest.components[component.name]!.id}, fieldIds: ${JSON.stringify(manifest.components[component.name]!.fields)} });`);
   }
   if (context.components.size > 0) lines.push("");
+  const peerEndpoint = context.endpoints.get("peer");
+  if (needsPeerEntity) {
+    const peerComponents = peerEndpoint?.components ?? [];
+    lines.push(`export const Peer = defineEntity("Peer", { peerState: PeerState${peerComponents.length === 0 ? "" : `, ${peerComponents.map((item) => `${item.name}: ${item.component}`).join(", ")}`} }, { id: 0 });`);
+    lines.push("");
+  }
   for (const entity of context.entities.values()) {
     lines.push(`export const ${entity.name} = defineEntity(${JSON.stringify(entity.name)}, { ${entity.components.map((item) => `${item.name}: ${item.component}`).join(", ")} }, { id: ${manifest.entities[entity.name]!.id} });`);
   }
   if (context.entities.size > 0) lines.push("");
   const commandNames: string[] = [];
   const eventNames: string[] = [];
-  for (const service of context.services.values()) {
-    for (const rpc of service.rpcs) {
-      const runtimeName = `${service.name}.${rpc.name}`;
-      const exportName = `${service.name}${rpc.name}`;
+  const rpcs: { readonly model: SnapRpcModel; readonly rpc: RpcItem }[] = [];
+  for (const endpoint of endpointsInOrder(context)) {
+    for (const rpc of endpoint.rpcs) {
+      const runtimeName = `${endpoint.name}.${rpc.name}`;
+      const exportName = `${endpoint.name}${rpc.name}`;
       const manifestMap = rpc.kind === "command" ? manifest.commands : manifest.events;
       const factory = rpc.kind === "command" ? "defineCommand" : "defineEvent";
       const collection = rpc.kind === "command" ? commandNames : eventNames;
       collection.push(exportName);
-      lines.push(`export const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs, context.enums), context.enums)}, { id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
+      lines.push(`const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs, context.enums), context.enums)}, { id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
       lines.push(`export type ${exportName}Payload = RpcPayload<typeof ${exportName}>;`);
+      rpcs.push({
+        model: {
+          kind: rpc.kind,
+          endpointName: endpoint.name,
+          rpcName: rpc.name,
+          runtimeName,
+          exportName,
+          payloadTypeName: `${exportName}Payload`,
+          handlerPath: handlerPathFor(endpoint, rpc),
+        },
+        rpc,
+      });
     }
   }
   if (commandNames.length + eventNames.length > 0) lines.push("");
   lines.push(`export const protocolHash = ${JSON.stringify(protocolHash)};`);
   lines.push("");
   lines.push(`export const protocol = defineProtocol({`);
-  lines.push(`  components: { ${[...context.components.keys()].join(", ")} },`);
-  lines.push(`  prefabs: { ${[...context.entities.keys()].join(", ")} },`);
+  lines.push(`  components: { ${[...(needsPeerEntity ? ["PeerState"] : []), ...context.components.keys()].join(", ")} },`);
+  lines.push(`  prefabs: { ${[...(needsPeerEntity ? ["Peer"] : []), ...context.entities.keys()].join(", ")} },`);
   lines.push(`  commands: { ${commandNames.join(", ")} },`);
   lines.push(`  events: { ${eventNames.join(", ")} },`);
   lines.push(`  hash: protocolHash,`);
   lines.push(`});`);
   lines.push("");
-  lines.push(emitRpcBindings(commandNames, eventNames));
+  lines.push(emitEndpointValidationHelpers());
+  lines.push("");
+  lines.push(emitRpcBindings(context, rpcs.map((item) => item.model)));
   return `${lines.join("\n")}\n`;
 }
 
@@ -658,35 +746,151 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function emitRpcBindings(commands: readonly string[], events: readonly string[]): string {
-  return `export const rpc = {
-  commands: {
-${commands.map((name) => `    ${name}: {
-      /** Sends the ${name} command from a client world to the server. */
-      send(world: ClientWorld, payload?: Partial<RpcPayload<typeof ${name}>>) {
-        world.send(${name}, payload);
-      },
-      /** Registers the server-side handler for the ${name} command. */
-      on(world: ServerWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) {
-        return world.on(${name}, handler);
-      },
-    },`).join("\n")}
-  },
-  events: {
-${events.map((name) => `    ${name}: {
-      /** Broadcasts the ${name} event from the server to all connected clients. */
-      broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof ${name}>>) {
-        world.broadcast(${name}, payload);
-      },
-      /** Sends the ${name} event from the server to one peer id. */
-      sendTo(world: ServerWorld, peerId: PeerId, payload?: Partial<RpcPayload<typeof ${name}>>) {
-        world.sendTo(peerId, ${name}, payload);
-      },
-      /** Registers the client-side handler for the ${name} event. */
-      on(world: ClientWorld, handler: RpcHandler<RpcFields<typeof ${name}> & FieldDefinitions>) {
-        return world.on(${name}, handler);
-      },
-    },`).join("\n")}
-  },
+function kebabCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function emitRpcBindings(
+  context: ReturnType<typeof buildContext>,
+  rpcs: readonly SnapRpcModel[],
+): string {
+  const world = endpointRpcBindings("world", "World", rpcs);
+  const peer = endpointRpcBindings("peer", "Peer", rpcs);
+  const entityBindings = [...context.entities.values()]
+    .map((entity) => entityRpcBindings(entity.name, rpcs))
+    .filter((item) => item.length > 0)
+    .join("\n");
+  return `export const internal = {
+${world}
+${peer}
+${entityBindings}
 } as const;`;
+}
+
+function endpointRpcBindings(property: "world" | "peer", endpointName: "World" | "Peer", rpcs: readonly SnapRpcModel[]): string {
+  const endpointRpcs = rpcs.filter((rpc) => rpc.endpointName === endpointName);
+  return `  ${endpointName}: {
+    commands: {
+${endpointRpcs.filter((rpc) => rpc.kind === "command").map((rpc) => endpointCommandBinding(property, rpc)).join("\n")}
+    },
+    events: {
+${endpointRpcs.filter((rpc) => rpc.kind === "event").map((rpc) => endpointEventBinding(property, rpc)).join("\n")}
+    },
+  },`;
+}
+
+function endpointCommandBinding(property: "world" | "peer", rpc: SnapRpcModel): string {
+  const target = property === "world" ? "WorldEntity" : "world.myPeerEntity()";
+  const sourceSpec = `peerEndpoint("source")`;
+  const targetSpec = property === "world" ? `worldEndpoint("target")` : `peerEndpoint("target")`;
+  return `      ${rpc.rpcName}: {
+        send(world: ClientWorld, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+          world.sendCommand(${target}, ${rpc.exportName}, payload);
+        },
+        on(world: ServerWorld, handler: CommandHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+          return world.onCommand(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, ${sourceSpec}, ${targetSpec}));
+        },
+      },`;
+}
+
+function endpointEventBinding(property: "world" | "peer", rpc: SnapRpcModel): string {
+  if (property === "peer") {
+    return `      ${rpc.rpcName}: {
+        broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+          world.broadcastPeerEvent(${rpc.exportName}, payload);
+        },
+        sendTo(world: ServerWorld, targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[], payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+          world.sendPeerEventTo(targets, ${rpc.exportName}, payload);
+        },
+        on(world: ClientWorld, handler: EventHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+          return world.onEvent(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, peerEndpoint("source"), peerEndpoint("target")));
+        },
+      },`;
+  }
+  return `      ${rpc.rpcName}: {
+        broadcast(world: ServerWorld, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+          world.broadcastEvent(WorldEntity, ${rpc.exportName}, payload);
+        },
+        sendTo(world: ServerWorld, targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[], payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+          world.sendEventTo(targets, WorldEntity, ${rpc.exportName}, payload);
+        },
+        on(world: ClientWorld, handler: EventHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+          return world.onEvent(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, worldEndpoint("source"), peerEndpoint("target")));
+        },
+      },`;
+}
+
+function entityRpcBindings(entityName: string, rpcs: readonly SnapRpcModel[]): string {
+  const entityRpcs = rpcs.filter((rpc) => rpc.endpointName === entityName);
+  if (entityRpcs.length === 0) return "";
+  return `  ${entityName}: {
+      commands: {
+${entityRpcs.filter((rpc) => rpc.kind === "command").map(entityCommandBinding).join("\n")}
+      },
+      events: {
+${entityRpcs.filter((rpc) => rpc.kind === "event").map(entityEventBinding).join("\n")}
+      },
+  },`;
+}
+
+function entityCommandBinding(rpc: SnapRpcModel): string {
+  return `        ${rpc.rpcName}: {
+          send(world: ClientWorld, target: ReadonlyEntityRef, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+            world.sendCommand(target, ${rpc.exportName}, payload);
+          },
+          on(world: ServerWorld, handler: CommandHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+            return world.onCommand(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, peerEndpoint("source"), entityEndpoint("target", ${rpc.endpointName})));
+          },
+        },`;
+}
+
+function entityEventBinding(rpc: SnapRpcModel): string {
+  return `        ${rpc.rpcName}: {
+          broadcast(world: ServerWorld, source: ReadonlyEntityRef, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+            world.broadcastEvent(source, ${rpc.exportName}, payload);
+          },
+          sendTo(world: ServerWorld, targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[], source: ReadonlyEntityRef, payload?: Partial<RpcPayload<typeof ${rpc.exportName}>>) {
+            world.sendEventTo(targets, source, ${rpc.exportName}, payload);
+          },
+          on(world: ClientWorld, handler: EventHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+            return world.onEvent(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, entityEndpoint("source", ${rpc.endpointName}), peerEndpoint("target")));
+          },
+        },`;
+}
+
+function emitEndpointValidationHelpers(): string {
+  return `function worldEndpoint(ref: "source" | "target"): EndpointSpec {
+  return { name: "World", ref, world: true };
+}
+
+function peerEndpoint(ref: "source" | "target"): EndpointSpec {
+  return { name: "Peer", ref, entity: Peer };
+}
+
+function entityEndpoint(ref: "source" | "target", entity: PrefabDefinition | ComponentSchema): EndpointSpec {
+  return { name: entity.name, ref, entity };
+}
+
+function validateEndpointCtx(world: ServerWorld | ClientWorld, ctx: EndpointValidationCtx, ...specs: readonly EndpointSpec[]): { readonly reason: string; readonly details?: Record<string, unknown> } | undefined {
+  for (const spec of specs) {
+    const ref = ctx[spec.ref];
+    if (ref === undefined) {
+      return { reason: "missing endpoint ref", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref } };
+    }
+    if (spec.world === true) {
+      if (ref.id !== WorldEntity.id) {
+        return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+      }
+      continue;
+    }
+    if (spec.entity !== undefined && !world.has(ref, spec.entity)) {
+      return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+    }
+  }
+  return undefined;
+}`;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createClient, createMemoryTransportPair, createServer, MovementMove, Position } from "../src/index";
-import type { Clock } from "snapscript";
+import { createClient, createServer, Position, commands } from "../src/index";
+import { createMemoryTransportPair, type Clock } from "snapscript";
 
 function clock(): Clock {
   let tick = 0;
@@ -23,7 +23,7 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    client.send(MovementMove, { dx: 1, dy: 0 });
+    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
     server.tick();
     client.tick();
 

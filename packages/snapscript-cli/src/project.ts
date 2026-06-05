@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Eta } from "eta";
+import ts from "typescript";
 import { analyzeSnapFile, generateSnapFile, type GeneratedFile, type SnapModel, type SnapRpcModel } from "./idl/index";
 
-export type ReportStatus = "generated" | "created" | "kept" | "stale";
+export type ReportStatus = "generated" | "created" | "kept" | "missing" | "stale";
 
 export interface ReportItem {
   readonly status: ReportStatus;
@@ -21,14 +22,33 @@ interface TemplateData {
   readonly schemaScriptPath: string;
   readonly commands: readonly RpcTemplateData[];
   readonly events: readonly RpcTemplateData[];
+  readonly serverModules: readonly EndpointModuleData[];
+  readonly clientModules: readonly EndpointModuleData[];
 }
 
 interface RpcTemplateData {
+  readonly endpointName: string;
+  readonly rpcName: string;
   readonly exportName: string;
   readonly payloadTypeName: string;
-  readonly handlerName: string;
-  readonly importPath: string;
+  readonly generatedImportPath: string;
+  readonly facadePath: string;
+  readonly handlerPath: string;
+  readonly moduleName: string;
+  readonly side: "server" | "client";
+  readonly targetArg: string;
+  readonly targetParam: string;
+  readonly eventSourceArg: string;
+  readonly eventSourceParam: string;
+}
+
+interface EndpointModuleData {
+  readonly endpointName: string;
+  readonly side: "server" | "client";
   readonly filePath: string;
+  readonly importPath: string;
+  readonly alias: string;
+  readonly rpcs: readonly RpcTemplateData[];
 }
 
 interface SystemModule {
@@ -41,26 +61,28 @@ const eta = new Eta({ autoTrim: false });
 export function generateProject(options: GenerateProjectOptions): readonly ReportItem[] {
   const cwd = resolve(options.cwd);
   const schemaPath = isAbsolute(options.schemaPath) ? options.schemaPath : resolve(cwd, options.schemaPath);
-  const outDir = options.outDir ?? "src/generated/snapscript";
+  const outDir = options.outDir ?? "src/generated";
   const outPath = isAbsolute(outDir) ? outDir : resolve(cwd, outDir);
   const model = analyzeSnapFile(schemaPath);
   const report: ReportItem[] = [];
-
-  assertRpcFileNames(model);
 
   for (const file of generateSnapFile({ inputPath: schemaPath, outDir: outPath })) {
     writeGenerated(file, report, cwd);
   }
 
   const data = templateData(model, packageNameFor(cwd), toPosix(relative(cwd, schemaPath)));
-  writeGenerated({ path: join(outPath, "rpc.ts"), content: render(rpcRegistryTemplate, data) }, report, cwd);
+  writeGenerated({ path: join(outPath, "commands.ts"), content: render(commandsTemplate, data) }, report, cwd);
+  writeGenerated({ path: join(outPath, "events.ts"), content: render(eventsTemplate, data) }, report, cwd);
+  writeGenerated({ path: join(outPath, "register.ts"), content: render(registerTemplate, data) }, report, cwd);
 
-  writeSystemRegistry(cwd, "server", report);
-  writeSystemRegistry(cwd, "client", report);
+  writeSystemRegistry(cwd, outPath, "server", report);
+  writeSystemRegistry(cwd, outPath, "client", report);
 
-  writeRpcStubs(cwd, data.commands, "server", "command", report);
-  writeRpcStubs(cwd, data.events, "client", "event", report);
-  report.push(...staleRpcFiles(cwd, data));
+  writeEndpointStubs(cwd, data.serverModules, report);
+  writeEndpointStubs(cwd, data.clientModules, report);
+  report.push(...scanEndpointExports(cwd, data.serverModules));
+  report.push(...scanEndpointExports(cwd, data.clientModules));
+  report.push(...staleLegacyRpcFiles(cwd));
 
   return report;
 }
@@ -69,29 +91,76 @@ export function formatReport(report: readonly ReportItem[]): string {
   return report.map((item) => `${item.status.padEnd(9)} ${item.path}`).join("\n");
 }
 
-function writeRpcStubs(
-  cwd: string,
-  rpcs: readonly RpcTemplateData[],
-  side: "server" | "client",
-  kind: "command" | "event",
-  report: ReportItem[],
-): void {
-  const template = kind === "command" ? commandStubTemplate : eventStubTemplate;
+function templateData(model: SnapModel, packageName: string, schemaScriptPath: string): TemplateData {
+  const commands = model.commands.map((rpc) => rpcData(rpc, "server"));
+  const events = model.events.map((rpc) => rpcData(rpc, "client"));
+  return {
+    packageName,
+    schemaScriptPath,
+    commands,
+    events,
+    serverModules: endpointModules(commands, "server"),
+    clientModules: endpointModules(events, "client"),
+  };
+}
+
+function rpcData(rpc: SnapRpcModel, side: "server" | "client"): RpcTemplateData {
+  const handlerPath = rpc.handlerPath.join("/");
+  const endpointName = rpc.endpointName;
+  return {
+    endpointName,
+    rpcName: rpc.rpcName,
+    exportName: rpc.exportName,
+    payloadTypeName: rpc.payloadTypeName,
+    generatedImportPath: relativeImport(dirname(handlerPath), "generated/protocol"),
+    facadePath: `.${endpointName}.${rpc.kind === "command" ? "commands" : "events"}.${rpc.rpcName}`,
+    handlerPath,
+    moduleName: moduleNameFor(endpointName, side),
+    side,
+    targetParam: endpointName === "World" || endpointName === "Peer" ? "" : "target: ReadonlyEntityRef, ",
+    targetArg: endpointName === "World" || endpointName === "Peer" ? "" : "target, ",
+    eventSourceParam: endpointName === "World" || endpointName === "Peer" ? "" : "source: ReadonlyEntityRef, ",
+    eventSourceArg: endpointName === "World" || endpointName === "Peer" ? "" : "source, ",
+  };
+}
+
+function endpointModules(rpcs: readonly RpcTemplateData[], side: "server" | "client"): readonly EndpointModuleData[] {
+  const byPath = new Map<string, RpcTemplateData[]>();
   for (const rpc of rpcs) {
-    const path = join(cwd, "src", "rpc", side, rpc.filePath);
-    writeCreateOnly(path, render(template, { rpc }), report, cwd);
+    byPath.set(rpc.handlerPath, [...(byPath.get(rpc.handlerPath) ?? []), rpc]);
+  }
+  return [...byPath.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([filePath, moduleRpcs]) => {
+      const endpointName = moduleRpcs[0]?.endpointName ?? "Unknown";
+      return {
+        endpointName,
+        side,
+        filePath,
+        importPath: `../${filePath.replace(/\.ts$/, "")}`,
+        alias: moduleNameFor(endpointName, side),
+        rpcs: moduleRpcs,
+      };
+    });
+}
+
+function writeEndpointStubs(cwd: string, modules: readonly EndpointModuleData[], report: ReportItem[]): void {
+  for (const module of modules) {
+    const path = join(cwd, "src", module.filePath);
+    const template = module.side === "server" ? commandEndpointStubTemplate : eventEndpointStubTemplate;
+    writeCreateOnly(path, render(template, { module }), report, cwd);
   }
 }
 
-function writeSystemRegistry(cwd: string, side: "server" | "client", report: ReportItem[]): void {
-  const modules = scanSystemModules(cwd, side);
+function writeSystemRegistry(cwd: string, outPath: string, side: "server" | "client", report: ReportItem[]): void {
+  const modules = scanSystemModules(cwd, side, outPath);
   const typeName = side === "server" ? "ServerWorld" : "ClientWorld";
   const fnName = side === "server" ? "registerServerSystems" : "registerClientSystems";
   const content = render(systemRegistryTemplate, { modules, typeName, fnName });
-  writeGenerated({ path: join(cwd, "src", "systems", "generated", `${side}.ts`), content }, report, cwd);
+  writeGenerated({ path: join(outPath, `systems.${side}.ts`), content }, report, cwd);
 }
 
-function scanSystemModules(cwd: string, side: "server" | "client"): readonly SystemModule[] {
+function scanSystemModules(cwd: string, side: "server" | "client", outPath: string): readonly SystemModule[] {
   const dir = join(cwd, "src", "systems", side);
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir)
@@ -105,70 +174,95 @@ function scanSystemModules(cwd: string, side: "server" | "client"): readonly Sys
     }
     return {
       alias: `system${index}`,
-      importPath: `../${side}/${file.replace(/\.ts$/, "")}`,
+      importPath: relativeImport(relative(cwd, outPath), `src/systems/${side}/${file.replace(/\.ts$/, "")}`),
     };
   });
 }
 
-function staleRpcFiles(cwd: string, data: TemplateData): readonly ReportItem[] {
-  const expected = new Set([
-    ...data.commands.map((rpc) => toPosix(join("src", "rpc", "server", rpc.filePath))),
-    ...data.events.map((rpc) => toPosix(join("src", "rpc", "client", rpc.filePath))),
-  ]);
+function scanEndpointExports(cwd: string, modules: readonly EndpointModuleData[]): readonly ReportItem[] {
+  const report: ReportItem[] = [];
+  for (const module of modules) {
+    const fullPath = join(cwd, "src", module.filePath);
+    if (!existsSync(fullPath)) continue;
+    const sourceFile = ts.createSourceFile(fullPath, readFileSync(fullPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const exports = exportedNames(sourceFile);
+    const expected = new Set(module.rpcs.map((rpc) => rpc.rpcName));
+    for (const name of expected) {
+      if (!exports.has(name)) {
+        report.push({ status: "missing", path: `${toPosix(relative(cwd, fullPath))}#${name}` });
+      }
+    }
+    for (const item of exports) {
+      if (!expected.has(item) && looksLikeHandlerExport(item)) {
+        report.push({ status: "stale", path: `${toPosix(relative(cwd, fullPath))}#${item}` });
+      }
+    }
+  }
+  return report;
+}
+
+function exportedNames(sourceFile: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (hasExportModifier(statement)) {
+      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) && statement.name !== undefined) {
+        names.add(statement.name.text);
+      }
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+        }
+      }
+    }
+    if (ts.isExportDeclaration(statement) && statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) {
+        names.add(element.propertyName?.text ?? element.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true;
+}
+
+function looksLikeHandlerExport(name: string): boolean {
+  return /^[A-Z][A-Za-z0-9_]*$/.test(name);
+}
+
+function staleLegacyRpcFiles(cwd: string): readonly ReportItem[] {
   const stale: ReportItem[] = [];
-  for (const [side, suffix] of [
-    ["server", ".command.ts"],
-    ["client", ".event.ts"],
-  ] as const) {
-    const dir = join(cwd, "src", "rpc", side);
+  for (const dirName of ["entities", "peer", "world"] as const) {
+    const dir = join(cwd, "src", dirName);
     if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir).filter((entry) => entry.endsWith(suffix)).sort((a, b) => a.localeCompare(b))) {
-      const path = toPosix(join("src", "rpc", side, file));
-      if (!expected.has(path)) stale.push({ status: "stale", path });
+    stale.push(...legacyRpcFilesInDir(dir, cwd));
+  }
+  return stale;
+}
+
+function legacyRpcFilesInDir(dir: string, cwd: string): readonly ReportItem[] {
+  const stale: ReportItem[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      stale.push(...legacyRpcFilesInDir(fullPath, cwd));
+      continue;
+    }
+    if (entry.name.endsWith(".command.ts") || entry.name.endsWith(".event.ts")) {
+      stale.push({ status: "stale", path: toPosix(relative(cwd, fullPath)) });
     }
   }
   return stale;
 }
 
-function templateData(model: SnapModel, packageName: string, schemaScriptPath: string): TemplateData {
-  return {
-    packageName,
-    schemaScriptPath,
-    commands: model.commands.map((rpc) => rpcData(rpc, "command")),
-    events: model.events.map((rpc) => rpcData(rpc, "event")),
-  };
+function relativeImport(fromDir: string, toPath: string): string {
+  const relativePath = toPosix(relative(fromDir, toPath)).replace(/\.ts$/, "");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
-function rpcData(rpc: SnapRpcModel, kind: "command" | "event"): RpcTemplateData {
-  const stem = kebabCase(rpc.rpcName);
-  const filePath = `${stem}.${kind}.ts`;
-  const handlerName = `${camelCase(rpc.rpcName)}${kind === "command" ? "Command" : "Event"}`;
-  return {
-    exportName: rpc.exportName,
-    payloadTypeName: rpc.payloadTypeName,
-    handlerName,
-    importPath: kind === "command" ? `../../rpc/server/${stem}.command` : `../../rpc/client/${stem}.event`,
-    filePath,
-  };
-}
-
-function assertRpcFileNames(model: SnapModel): void {
-  for (const [kind, rpcs] of [
-    ["command", model.commands],
-    ["event", model.events],
-  ] as const) {
-    const seen = new Map<string, SnapRpcModel>();
-    for (const rpc of rpcs) {
-      const file = `${kebabCase(rpc.rpcName)}.${kind}.ts`;
-      const existing = seen.get(file);
-      if (existing !== undefined) {
-        throw new Error(
-          `RPC file name collision: ${existing.runtimeName} and ${rpc.runtimeName} both map to ${file}; rename one RPC`,
-        );
-      }
-      seen.set(file, rpc);
-    }
-  }
+function moduleNameFor(endpointName: string, side: "server" | "client"): string {
+  return `${side}${endpointName}`;
 }
 
 function writeGenerated(file: GeneratedFile, report: ReportItem[], cwd: string): void {
@@ -204,62 +298,89 @@ function kebabCase(value: string): string {
     .toLowerCase();
 }
 
-function camelCase(value: string): string {
-  const parts = kebabCase(value).split("-").filter(Boolean);
-  const [first = "", ...rest] = parts;
-  return `${first}${rest.map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join("")}`;
-}
-
 function toPosix(path: string): string {
   return path.split(sep).join("/");
 }
 
-const rpcRegistryTemplate = `// Code-generated by snapscript-cli. Do not edit.
+const registerTemplate = `// Code-generated by snapscript-cli. Do not edit.
 import type { ClientWorld, ServerWorld } from "snapscript";
-import { rpc } from "./protocol";
-<% it.commands.forEach((rpc) => { %>import { <%= rpc.handlerName %> } from "<%= rpc.importPath %>";
-<% }) %><% it.events.forEach((rpc) => { %>import { <%= rpc.handlerName %> } from "<%= rpc.importPath %>";
+import { internal } from "./protocol";
+<% it.serverModules.forEach((module) => { %>import * as <%= module.alias %> from "<%= module.importPath %>";
+<% }) %><% it.clientModules.forEach((module) => { %>import * as <%= module.alias %> from "<%= module.importPath %>";
 <% }) %>
 export function registerServerRpc(world: ServerWorld): void {
 <% if (it.commands.length === 0) { %>  void world;
-<% } else { %><% it.commands.forEach((rpc) => { %>  rpc.commands.<%= rpc.exportName %>.on(world, (ctx) => <%= rpc.handlerName %>(world, ctx));
+<% } else { %><% it.commands.forEach((rpc) => { %>  internal<%= rpc.facadePath %>.on(world, (ctx) => <%= rpc.moduleName %>.<%= rpc.rpcName %>(world, ctx));
 <% }) %><% } %>}
 
 export function registerClientRpc(world: ClientWorld): void {
 <% if (it.events.length === 0) { %>  void world;
-<% } else { %><% it.events.forEach((rpc) => { %>  rpc.events.<%= rpc.exportName %>.on(world, (ctx) => <%= rpc.handlerName %>(world, ctx));
+<% } else { %><% it.events.forEach((rpc) => { %>  internal<%= rpc.facadePath %>.on(world, (ctx) => <%= rpc.moduleName %>.<%= rpc.rpcName %>(world, ctx));
 <% }) %><% } %>}
 `;
 
-const commandStubTemplate = `import type { RpcCtx, ServerWorld } from "snapscript";
-import type { <%= it.rpc.payloadTypeName %> } from "../../generated/snapscript/protocol";
+const commandsTemplate = `// Code-generated by snapscript-cli. Do not edit.
+import type { ClientWorld, ReadonlyEntityRef } from "snapscript";
+import { internal } from "./protocol";
+import type {
+<% it.commands.forEach((rpc) => { %>  <%= rpc.payloadTypeName %>,
+<% }) %>} from "./protocol";
 
-/**
- * Handles a client-to-server command.
- *
- * \`ctx.sender\` is the sending peer id. Validate authority, ownership, and payload limits before
- * mutating authoritative state.
- */
-export function <%= it.rpc.handlerName %>(world: ServerWorld, ctx: RpcCtx<<%= it.rpc.payloadTypeName %>>): void {
+export const commands = {
+<% [...new Set(it.commands.map((rpc) => rpc.endpointName))].forEach((endpointName) => { %>  <%= endpointName %>: {
+<% it.commands.filter((rpc) => rpc.endpointName === endpointName).forEach((rpc) => { %>    <%= rpc.rpcName %>(world: ClientWorld, <%= rpc.targetParam %>payload: <%= rpc.payloadTypeName %>): void {
+      internal<%= rpc.facadePath %>.send(world, <%= rpc.targetArg %>payload);
+    },
+<% }) %>  },
+<% }) %>} as const;
+`;
+
+const eventsTemplate = `// Code-generated by snapscript-cli. Do not edit.
+import type { ReadonlyEntityRef, ServerWorld } from "snapscript";
+import { internal } from "./protocol";
+import type {
+<% it.events.forEach((rpc) => { %>  <%= rpc.payloadTypeName %>,
+<% }) %>} from "./protocol";
+
+type PeerTarget = ReadonlyEntityRef | readonly ReadonlyEntityRef[];
+
+export const events = {
+<% [...new Set(it.events.map((rpc) => rpc.endpointName))].forEach((endpointName) => { %>  <%= endpointName %>: {
+<% it.events.filter((rpc) => rpc.endpointName === endpointName).forEach((rpc) => { %>    <%= rpc.rpcName %>: {
+      broadcast(world: ServerWorld, <%= rpc.eventSourceParam %>payload: <%= rpc.payloadTypeName %>): void {
+        internal<%= rpc.facadePath %>.broadcast(world, <%= rpc.eventSourceArg %>payload);
+      },
+      sendTo(world: ServerWorld, targets: PeerTarget, <%= rpc.eventSourceParam %>payload: <%= rpc.payloadTypeName %>): void {
+        internal<%= rpc.facadePath %>.sendTo(world, targets, <%= rpc.eventSourceArg %>payload);
+      },
+    },
+<% }) %>  },
+<% }) %>} as const;
+`;
+
+const commandEndpointStubTemplate = `<% it.module.rpcs.forEach((rpc, index) => { %><% if (index === 0) { %>import type { CommandCtx, ServerWorld } from "snapscript";
+import type {
+<% } %>  <%= rpc.payloadTypeName %>,
+<% }) %>} from "../../generated/protocol";
+
+<% it.module.rpcs.forEach((rpc) => { %>export function <%= rpc.rpcName %>(world: ServerWorld, ctx: CommandCtx<<%= rpc.payloadTypeName %>>): void {
   void world;
   void ctx;
 }
-`;
 
-const eventStubTemplate = `import type { ClientWorld, RpcCtx } from "snapscript";
-import type { <%= it.rpc.payloadTypeName %> } from "../../generated/snapscript/protocol";
+<% }) %>`;
 
-/**
- * Handles a server-to-client event.
- *
- * \`ctx.sender\` is the server peer id. Keep presentation feedback here; authoritative gameplay
- * state should still come from replicated world data.
- */
-export function <%= it.rpc.handlerName %>(world: ClientWorld, ctx: RpcCtx<<%= it.rpc.payloadTypeName %>>): void {
+const eventEndpointStubTemplate = `<% it.module.rpcs.forEach((rpc, index) => { %><% if (index === 0) { %>import type { ClientWorld, EventCtx } from "snapscript";
+import type {
+<% } %>  <%= rpc.payloadTypeName %>,
+<% }) %>} from "../../generated/protocol";
+
+<% it.module.rpcs.forEach((rpc) => { %>export function <%= rpc.rpcName %>(world: ClientWorld, ctx: EventCtx<<%= rpc.payloadTypeName %>>): void {
   void world;
   void ctx;
 }
-`;
+
+<% }) %>`;
 
 const systemRegistryTemplate = `// Code-generated by snapscript-cli. Do not edit.
 import type { <%= it.typeName %> } from "snapscript";

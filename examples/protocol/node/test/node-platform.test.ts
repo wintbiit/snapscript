@@ -1,4 +1,4 @@
-import { createClient, createServer, MovementMove, Position } from "@snapscript/example-protocol-core";
+import { commands, createClient, createServer, Position } from "@snapscript/example-protocol-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeClock, NodeWebSocketClientTransport, NodeWebSocketServerTransport } from "../src/index";
 
@@ -25,7 +25,7 @@ describe("node protocol platform", () => {
     await wait(25);
     client.tick();
 
-    client.send(MovementMove, { dx: 1, dy: 0 });
+    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
     await wait(25);
     server.tick();
     await wait(25);

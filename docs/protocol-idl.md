@@ -1,6 +1,6 @@
 # Protocol IDL Direction
 
-Last reviewed: 2026-05-25
+Last reviewed: 2026-06-05
 
 ## Purpose
 
@@ -16,16 +16,9 @@ schema.snap
   -> generated TypeScript protocol, RPC bindings, manifest, and optional stubs
 ```
 
-The generated TypeScript should call the existing runtime APIs:
-
-- `defineComponent()`
-- `defineEntity()`
-- `defineCommand()`
-- `defineEvent()`
-- `defineProtocol()`
-
-The handwritten APIs remain the runtime foundation and an escape hatch. The IDL is a developer
-experience layer, not a replacement runtime.
+The generated TypeScript should call the runtime definition APIs, but the public protocol model is
+IDL-first. The vNext RPC design is a breaking redesign around endpoint-scoped declarations; it does
+not preserve the previous service-scoped RPC API.
 
 ## Goals
 
@@ -58,7 +51,8 @@ deterministic ids that are obvious from the `.snap` file.
 Rules:
 
 - Component and entity declaration order is the generated id source.
-- Commands and events share one RPC id namespace, assigned by service/RPC declaration order.
+- Commands and events share one RPC id namespace, assigned by endpoint declaration order and then
+  RPC declaration order inside `world {}`, `peer {}`, and `entity {}` blocks.
 - Field order inside a component, command, or event is the field id source.
 - New fields should be appended.
 - Reordering fields or declarations is a breaking protocol change.
@@ -124,12 +118,35 @@ Risks:
 The parser/compiler is a development tool dependency. Generated protocol files do not depend on
 Peggy; they import only the SnapScript runtime API.
 
-## v1 Language Surface
+## vNext Language Surface
 
-The v1 syntax is represented by `examples/protocol/game.snap`:
+The vNext syntax is represented by `examples/protocol/game.snap`:
 
 ```snap
 syntax = "v1"
+
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+
+world {
+  state: MatchState
+
+  command StartGame() reliable
+  event GameStarted() reliable
+}
+
+component ConnectionInfo {
+  region: u8(0)
+}
+
+peer {
+  connectionInfo: ConnectionInfo
+
+  command Ready() reliable
+  event Alert(reason: u8(0)) reliable
+}
 
 struct Vector2 {
   x: qf32(min: -128, max: 128, precision: 0.01, default: 0)
@@ -148,52 +165,73 @@ component Health {
 entity Player {
   position: Position
   health: Health
-service Movement {
+
   command Move(input: MoveInput) unreliable
   event MoveDisabled(disabled: bool) reliable
 }
 ```
 
-`service` is an RPC namespace only. It does not create a system, app, room, or transport binding.
-Runtime RPC names use the service prefix, for example `Movement.Move`.
+RPC is declared inside endpoints:
+
+- `world {}` maps to the reserved `WorldEntity`.
+- `peer {}` maps to replicated framework-created `PeerEntity` instances. Generated protocols include
+  a `Peer` prefab with the built-in replicated `PeerState` component plus any components declared in
+  `peer {}`.
+- `entity Name {}` maps to gameplay entities.
+
+Endpoint blocks contain component references, commands, and events. They do not declare inline
+fields or implicitly generate endpoint components.
+
+World commands are valid and target `WorldEntity`. Peer commands target the sending PeerEntity.
+
+The old external `service {}` block is removed. Runtime RPC names use the endpoint prefix, for
+example `Player.Move`, `Peer.Ready`, and `World.GameStarted`.
 
 The first generated output should include:
 
 - `protocol.ts`
 - typed component/entity exports
-- typed command/event exports
-- RPC binding helpers
+- a generated `Peer` prefab when RPC/peer endpoint support needs PeerEntity routing
+- endpoint-scoped RPC binding helpers
+- payload/context types for generated handlers
 - `manifest.json`
 
 ## RPC Bindings
 
-The IDL should reduce repeated command/event wiring.
+The IDL should reduce repeated command/event wiring while keeping execution world-authoritative.
+Handlers receive either `CommandCtx<TPayload>` or `EventCtx<TPayload>`. Payload fields are not
+expanded into handler arguments; decoded data stays on `ctx.payload`.
 
-The generated code may expose helpers like:
+The generated project exposes short command/event helpers:
 
 ```ts
-rpc.commands.MovementMove.send(clientWorld, { dx: 1, dy: 0 });
-rpc.commands.MovementMove.on(serverWorld, (ctx) => {
-  ctx.payload.dx;
-  ctx.sender;
+commands.Player.Move(clientWorld, playerEntity, {
+  dx: 1,
+  dy: 0,
 });
 
-rpc.events.MovementMoveDisabled.broadcast(serverWorld, { disabled: true });
-rpc.events.MovementMoveDisabled.on(clientWorld, (ctx) => {
-  ctx.payload.disabled;
+events.Player.MoveDisabled.broadcast(serverWorld, playerEntity, { disabled: true });
+events.Player.MoveDisabled.sendTo(serverWorld, [peerEntity], playerEntity, {
+  disabled: true,
 });
 ```
 
-This keeps the world API unchanged while making generated usage more declarative. The raw
-`clientWorld.send(Move, payload)`, `serverWorld.on(Move, handler)`, `serverWorld.broadcast(Event,
-payload)`, and `clientWorld.on(Event, handler)` APIs remain available.
+Event helpers must provide both `broadcast()` and `sendTo()`. `sendTo()` accepts one PeerEntity or an
+array of PeerEntity refs. `broadcast()` means all connected peers.
+
+The generated facade should not export standalone raw RPC definitions such as `PlayerMove`; command
+and event usage goes through the endpoint facade.
+
+Entity type validation failures are logged through `logger.warn` and dropped before user handlers
+run. Validation uses the endpoint entity declaration's component set, for example
+`world.has(target, Player)`. Missing source/target entities are also logged and dropped. Gameplay
+authorization is not implicit; user handlers validate ownership, possession, cooldowns, target
+visibility, and other project rules.
+
+See [docs/rpc-entity-model.md](rpc-entity-model.md) for the full decision record.
 
 ## Open Questions
 
-- Exact `.snap` syntax and naming conventions.
 - Whether explicit ids should ever be supported as an advanced source-level escape hatch.
 - Whether entities should support aliases only, or direct component shorthand too.
-- Whether generated RPC bindings should live under `rpc.commands` / `rpc.events` or a flatter shape.
-- Whether handler stubs are generated once, overwritten, or protected by a separate user file pattern.
-- Whether `.snap` supports imports in phase one or stays single-file.
 - Whether `.proto` import should be supported later for RPC payloads only.

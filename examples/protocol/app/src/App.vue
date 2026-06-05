@@ -81,7 +81,7 @@ function n(value: number | undefined, digits = 0): string {
       <div>
         <h1>{{ pageTitle }}</h1>
         <p v-if="mode === 'home'">Open Server and Client in separate browser pages. The app package supplies WebSocket, clock, input, and rendering; the core package owns .snap, RPC handlers, and systems.</p>
-        <p v-else-if="mode === 'server'">Server world created through the generated core package. Command handlers live in core/src/rpc/server.</p>
+        <p v-else-if="mode === 'server'">Server world created through the generated core package. Command handlers live under core/src/logic/server.</p>
         <p v-else>Client world created through the generated core package. Buttons send typed commands from generated protocol exports.</p>
       </div>
       <div class="endpoint">{{ wsUrl }}</div>
@@ -94,7 +94,7 @@ function n(value: number | undefined, digits = 0): string {
       </a>
       <a class="launch" href="/client" target="_blank" rel="noreferrer">
         <strong>Open Client</strong>
-        <span>Sends generated Movement.Move commands and renders replicated state.</span>
+        <span>Sends generated Player.Move commands and renders replicated state.</span>
       </a>
     </section>
 

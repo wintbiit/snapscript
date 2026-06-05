@@ -1,5 +1,5 @@
 import type { ClientWorld } from "snapscript";
-import { Position } from "../../generated/snapscript/protocol";
+import { Position } from "../../generated/protocol";
 
 export function register(world: ClientWorld): void {
   world.system("view.sample", "postUpdate", (world) => {

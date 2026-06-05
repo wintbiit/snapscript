@@ -1,7 +1,16 @@
 import { ServerPeerId, defaultLogger, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
 import { decodeRpc, encodeRpc } from "../rpc/index";
-import type { RpcCtx, RpcDefinition, RpcHandler } from "../rpc/index";
+import type {
+  CommandHandler,
+  CommandValidator,
+  EventHandler,
+  EventValidator,
+  RpcCtx,
+  RpcDefinition,
+  RpcHandler,
+  RpcValidationFailure,
+} from "../rpc/index";
 import type { FieldDefinitions, FieldValues } from "../schema/index";
 import {
   applySnapshot,
@@ -32,6 +41,8 @@ export interface SyncServerOptions {
   readonly snapshotEncoding?: "default" | "batched";
   readonly isVisible?: (peerId: PeerId, entityId: number) => boolean;
   readonly canReusePeerSnapshots?: () => boolean;
+  readonly ensurePeerEntity?: (peerId: PeerId) => number;
+  readonly markPeerDisconnected?: (peerId: PeerId) => void;
 }
 
 export interface SyncClientOptions {
@@ -43,6 +54,7 @@ export interface SyncClientOptions {
   readonly logger?: Logger;
   readonly sendRate?: number;
   readonly onSnapshot?: (context: SnapshotContext) => void;
+  readonly assignPeerEntity?: (peerId: PeerId, peerEntityId: number) => void;
 }
 
 export type SyncRuntimeOptions = SyncClientOptions;
@@ -56,7 +68,27 @@ export interface SyncServer {
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
+  sendEventTo<TFields extends FieldDefinitions>(
+    targets: PeerEventTarget | readonly PeerEventTarget[],
+    sourceId: number,
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  sendPeerEventTo<TFields extends FieldDefinitions>(
+    targets: PeerEventTarget | readonly PeerEventTarget[],
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  broadcastPeerEvent<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
   broadcast<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  broadcastEvent<TFields extends FieldDefinitions>(
+    sourceId: number,
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
@@ -64,6 +96,16 @@ export interface SyncServer {
     rpc: RpcDefinition<TFields>,
     handler: RpcHandler<TFields>,
   ): () => void;
+  onCommand<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    handler: CommandHandler<TFields>,
+    validator?: CommandValidator<TFields>,
+  ): () => void;
+}
+
+export interface PeerEventTarget {
+  readonly peerId: PeerId;
+  readonly peerEntityId: number;
 }
 
 export interface SyncClient {
@@ -74,9 +116,19 @@ export interface SyncClient {
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
+  sendCommand<TFields extends FieldDefinitions>(
+    targetId: number,
+    rpc: RpcDefinition<TFields>,
+    payload?: Partial<FieldValues<TFields>>,
+  ): void;
   on<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
     handler: RpcHandler<TFields>,
+  ): () => void;
+  onEvent<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    handler: EventHandler<TFields>,
+    validator?: EventValidator<TFields>,
   ): () => void;
 }
 
@@ -111,6 +163,7 @@ class PeerIds {
 type HandlerEntry = {
   readonly rpc: RpcDefinition;
   readonly handler: RpcHandler<FieldDefinitions>;
+  readonly validator?: (context: RpcCtx<FieldValues<FieldDefinitions>>) => RpcValidationFailure | undefined;
 };
 
 class HandlerTable {
@@ -119,6 +172,7 @@ class HandlerTable {
   add<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
     handler: RpcHandler<TFields>,
+    validator?: (context: RpcCtx<FieldValues<TFields>>) => RpcValidationFailure | undefined,
   ): () => void {
     if (typeof handler !== "function") {
       throw new Error(`RPC "${rpc.name}" handler must be a function`);
@@ -126,6 +180,11 @@ class HandlerTable {
     const entry: HandlerEntry = {
       rpc,
       handler: handler as RpcHandler<FieldDefinitions>,
+      ...(validator === undefined
+        ? {}
+        : {
+            validator: validator as (context: RpcCtx<FieldValues<FieldDefinitions>>) => RpcValidationFailure | undefined,
+          }),
     };
     const handlers = this.#handlers.get(rpc.rpcId) ?? [];
     handlers.push(entry);
@@ -145,10 +204,29 @@ class HandlerTable {
     };
   }
 
+  addCommand<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    handler: CommandHandler<TFields>,
+    validator?: CommandValidator<TFields>,
+  ): () => void {
+    return this.add(rpc, handler as unknown as RpcHandler<TFields>, validator as unknown as (context: RpcCtx<FieldValues<TFields>>) => RpcValidationFailure | undefined);
+  }
+
+  addEvent<TFields extends FieldDefinitions>(
+    rpc: RpcDefinition<TFields>,
+    handler: EventHandler<TFields>,
+    validator?: EventValidator<TFields>,
+  ): () => void {
+    return this.add(rpc, handler as unknown as RpcHandler<TFields>, validator as unknown as (context: RpcCtx<FieldValues<TFields>>) => RpcValidationFailure | undefined);
+  }
+
   dispatch(
     rpc: RpcDefinition,
     payload: FieldValues<FieldDefinitions>,
-    context: Omit<RpcCtx<FieldValues<FieldDefinitions>>, "payload">,
+    context: Omit<RpcCtx<FieldValues<FieldDefinitions>>, "payload"> & {
+      readonly source?: { readonly id: number };
+      readonly target?: { readonly id: number };
+    },
     logger: Logger | undefined,
   ): void {
     const frozenContext = Object.freeze({
@@ -158,6 +236,15 @@ class HandlerTable {
     // Handlers run from a stable snapshot so registration changes during dispatch affect later packets only.
     for (const entry of [...(this.#handlers.get(rpc.rpcId) ?? [])]) {
       try {
+        const failure = entry.validator?.(frozenContext);
+        if (failure !== undefined) {
+          logger?.warn?.("RPC packet dropped", {
+            rpc: entry.rpc.name,
+            reason: failure.reason,
+            ...(failure.details === undefined ? {} : failure.details),
+          });
+          continue;
+        }
         entry.handler(frozenContext);
       } catch (error) {
         logger?.error?.("RPC handler failed", {
@@ -179,6 +266,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
   options.transport.onPacket((peer, packetChannel, bytes) => {
     peers.add(peer);
     const peerId = peerIds.idFor(peer);
+    const peerEntityId = options.ensurePeerEntity?.(peerId) ?? peerId;
     try {
       const messageType = peekMessageType(bytes);
       if (messageType === MessageType.Control) {
@@ -192,7 +280,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           options.transport.send(
             peer,
             "reliable",
-            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId, options.protocolHash),
+            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId, options.protocolHash, peerEntityId),
           );
           sendFullSnapshot(peer);
         }
@@ -208,7 +296,8 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
             tick: decoded.tick,
             channel: packetChannel,
             rpc: decoded.rpc,
-            sender: peerId,
+            source: { id: peerEntityId },
+            target: { id: decoded.targetId },
           },
           logger,
         );
@@ -222,11 +311,13 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
   function sendFullSnapshot(peer?: PeerRef): void {
     if (peer !== undefined) {
       const peerId = peerIds.idFor(peer);
+      options.ensurePeerEntity?.(peerId);
       const state = stateFor(peerStates, peer);
       const ops = buildFullOpsForPeer(options.world, peerId, options.isVisible, state);
       const bytes = encodeSnapshotOps(options.world, options.clock.tick(), ops);
       options.transport.send(peer, "reliable", bytes);
       replaceKnownState(peerStates, peer, ops);
+      worldInternals(options.world).clearWrittenDirty(dirtyOpsFromSnapshotOps(ops));
       return;
     }
 
@@ -257,6 +348,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       const dirty = internals.getDirtySnapshot();
       const tick = options.clock.tick();
       const peerList = currentPeers(options.transport, peers);
+      markDisconnectedPeers(options, peerIds, peers, [...peers]);
       if (trySendSharedUpdate(options, peerStates, peerList, dirty, tick)) {
         internals.clearWrittenDirty(dirty);
         return;
@@ -297,13 +389,56 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       if (peer === undefined) {
         throw new Error(`ServerWorld.sendTo() unknown peer ${peerId}`);
       }
-      options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
+      options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), ServerPeerId, peerId));
+    },
+    sendEventTo(targets, sourceId, rpc, payload) {
+      for (const target of Array.isArray(targets) ? targets : [targets]) {
+        const peer = peerIds.refFor(target.peerId);
+        if (peer === undefined) {
+          throw new Error(`ServerWorld.sendEventTo() unknown peer entity ${target.peerEntityId}`);
+        }
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), sourceId, target.peerEntityId));
+      }
+    },
+    sendPeerEventTo(targets, rpc, payload) {
+      for (const target of Array.isArray(targets) ? targets : [targets]) {
+        const peer = peerIds.refFor(target.peerId);
+        if (peer === undefined) {
+          throw new Error(`ServerWorld.sendPeerEventTo() unknown peer entity ${target.peerEntityId}`);
+        }
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), target.peerEntityId, target.peerEntityId));
+      }
+    },
+    broadcastPeerEvent(rpc, payload) {
+      const tick = options.clock.tick();
+      for (const peer of currentPeers(options.transport, peers)) {
+        const peerId = peerIds.idFor(peer);
+        const peerEntityId = options.ensurePeerEntity?.(peerId) ?? peerId;
+        if (!isVisible(peerId, peerEntityId, options.isVisible)) {
+          continue;
+        }
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, tick, peerEntityId, peerEntityId));
+      }
     },
     broadcast(rpc, payload) {
-      options.transport.broadcast(rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
+      options.transport.broadcast(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), ServerPeerId, 0));
+    },
+    broadcastEvent(sourceId, rpc, payload) {
+      const tick = options.clock.tick();
+      for (const peer of currentPeers(options.transport, peers)) {
+        const peerId = peerIds.idFor(peer);
+        if (sourceId !== WorldEntity.id && !isVisible(peerId, sourceId, options.isVisible)) {
+          continue;
+        }
+        const peerEntityId = options.ensurePeerEntity?.(peerId) ?? peerId;
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, tick, sourceId, peerEntityId));
+      }
     },
     on(rpc, handler) {
       return handlers.add(rpc, handler);
+    },
+    onCommand(rpc, handler, validator) {
+      return handlers.addCommand(rpc, handler, validator);
     },
   };
 }
@@ -427,6 +562,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const logger = options.logger ?? defaultLogger;
   const handlers = new HandlerTable();
   let assignedPeerId: PeerId = ServerPeerId;
+  let assignedPeerEntityId = ServerPeerId;
 
   options.transport.onPacket((packetChannel, bytes) => {
     try {
@@ -436,6 +572,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         assertProtocolHashMatch("client", options.protocolHash, control.protocolHash);
         if (control.type === ControlType.PeerAssigned) {
           assignedPeerId = control.peerId ?? ServerPeerId;
+          assignedPeerEntityId = control.peerEntityId ?? assignedPeerId;
+          options.assignPeerEntity?.(assignedPeerId, assignedPeerEntityId);
         }
         return;
       }
@@ -454,7 +592,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             tick: decoded.tick,
             channel: packetChannel,
             rpc: decoded.rpc,
-            sender: ServerPeerId,
+            source: { id: decoded.sourceId },
+            target: { id: decoded.targetId === 0 ? assignedPeerEntityId : decoded.targetId },
           },
           logger,
         );
@@ -484,10 +623,16 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     },
     requestFullSnapshot,
     send(rpc, payload) {
-      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick()));
+      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), assignedPeerEntityId, 0));
+    },
+    sendCommand(targetId, rpc, payload) {
+      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), assignedPeerEntityId, targetId));
     },
     on(rpc, handler) {
       return handlers.add(rpc, handler);
+    },
+    onEvent(rpc, handler, validator) {
+      return handlers.addEvent(rpc, handler, validator);
     },
   };
 }
@@ -504,6 +649,7 @@ function assertProtocolHashMatch(
   if (expected === undefined || received === undefined) {
     return;
   }
+
   if (expected !== received) {
     throw new Error(`SnapScript protocol hash mismatch on ${side}: expected ${expected}, received ${received}`);
   }
@@ -516,7 +662,26 @@ function logError(logger: Logger | undefined, message: string, error: unknown): 
 }
 
 function currentPeers(transport: ServerTransport, seen: Set<PeerRef>): readonly PeerRef[] {
-  return [...new Set([...(transport.peers?.() ?? []), ...seen])];
+  const active = transport.peers?.();
+  return active === undefined ? [...seen] : [...new Set([...active, ...seen])];
+}
+
+function markDisconnectedPeers(
+  options: SyncServerOptions,
+  peerIds: PeerIds,
+  seen: Set<PeerRef>,
+  activeOrSeen: readonly PeerRef[],
+): void {
+  if (options.transport.peers === undefined || options.markPeerDisconnected === undefined) {
+    return;
+  }
+  const active = new Set(options.transport.peers());
+  for (const peer of activeOrSeen) {
+    if (!seen.has(peer) || active.has(peer)) {
+      continue;
+    }
+    options.markPeerDisconnected(peerIds.idFor(peer));
+  }
 }
 
 function stateFor(map: Map<PeerRef, PeerState>, peer: PeerRef): PeerState {
@@ -712,4 +877,15 @@ function compareComponentOp(
   b: { readonly entityId: number; readonly componentId: number },
 ): number {
   return a.entityId - b.entityId || a.componentId - b.componentId;
+}
+
+function dirtyOpsFromSnapshotOps(ops: SnapshotWriteOps): DirtyOps {
+  return {
+    created: ops.created ?? [],
+    network: ops.network ?? [],
+    added: ops.added ?? [],
+    updated: ops.updated ?? [],
+    removed: ops.removed ?? [],
+    destroyed: ops.destroyed ?? [],
+  };
 }

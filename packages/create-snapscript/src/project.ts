@@ -32,9 +32,27 @@ component Health {
   hp: u16(100)
 }
 
-entity Player {
-  position: Position
-  health: Health
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+
+world {
+  state: MatchState
+
+  command StartGame() reliable
+  event GameStarted() reliable
+}
+
+component ConnectionInfo {
+  region: u8(0)
+}
+
+peer {
+  connectionInfo: ConnectionInfo
+
+  command Ready() reliable
+  event Alert(reason: u8(0)) reliable
 }
 
 struct MoveInput {
@@ -42,7 +60,10 @@ struct MoveInput {
   dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
 }
 
-service Movement {
+entity Player {
+  position: Position
+  health: Health
+
   command Move(input: MoveInput) unreliable
   event MoveDisabled(disabled: bool) reliable
 }
@@ -75,7 +96,7 @@ export function createProject(options: CreateProjectOptions): readonly ReportIte
   const generatedReport = generateProject({
     cwd: targetDir,
     schemaPath,
-    outDir: "src/generated/snapscript",
+    outDir: "src/generated",
   });
   const targetPrefix = toPosix(relative(options.cwd, targetDir));
   report.push(...generatedReport.map((item) => ({ ...item, path: `${targetPrefix}/${item.path}` })));
@@ -93,9 +114,6 @@ function renderBaseProject(
     { path: "src/index.ts", content: render(indexTemplate, data) },
     { path: "src/create-server.ts", content: render(kind === "example" ? exampleCreateServerTemplate : genericCreateServerTemplate, data) },
     { path: "src/create-client.ts", content: render(createClientTemplate, data) },
-    { path: "src/state.ts", content: render(kind === "example" ? exampleStateTemplate : genericStateTemplate, data) },
-    { path: "src/transport/memory.ts", content: render(memoryTransportTemplate, data) },
-    { path: "src/transport/README.md", content: render(memoryTransportReadmeTemplate, data) },
     { path: "src/systems/server/10-health.system.ts", content: render(kind === "example" ? exampleServerSystemTemplate : genericServerSystemTemplate, data) },
     { path: "src/systems/client/10-view.system.ts", content: render(kind === "example" ? exampleClientSystemTemplate : genericClientSystemTemplate, data) },
     { path: "test/roundtrip.test.ts", content: render(kind === "example" ? exampleRoundtripTestTemplate : genericRoundtripTestTemplate, data) },
@@ -145,7 +163,7 @@ const packageJsonTemplate = `<%~ JSON.stringify({
   type: "module",
   scripts: {
     "snap:check": \`snapscript check \${it.schemaScriptPath}\`,
-    "snap:generate": \`snapscript generate \${it.schemaScriptPath} --out src/generated/snapscript\`,
+    "snap:generate": \`snapscript generate \${it.schemaScriptPath} --out src/generated\`,
     check: "pnpm snap:check",
     generate: "pnpm snap:generate",
     typecheck: "tsc --noEmit",
@@ -162,16 +180,43 @@ const packageJsonTemplate = `<%~ JSON.stringify({
   },
   exports: {
     ".": "./src/index.ts",
-    "./generated/snapscript/protocol": "./src/generated/snapscript/protocol.ts",
+    "./generated/protocol": "./src/generated/protocol.ts",
   },
 }, null, 2) %>
 `;
 
 const rootReadmeTemplate = `# <%= it.packageName %>
 
-This package is a platform-neutral SnapScript game core. It owns protocol definitions,
-authoritative server/client world creation, gameplay systems, and RPC handlers. It does not own
-browser, Node, Puerts, engine renderer, persistence, login, matchmaking, or production networking.
+This package is a platform-neutral SnapScript game core. It owns protocol definitions, generated
+RPC/system wiring, authoritative server/client world creation, gameplay systems, and RPC handlers.
+It does not own browser, Node, Puerts, engine renderer, persistence, login, matchmaking, or
+production networking.
+
+## Get Started
+
+\`\`\`sh
+pnpm install
+pnpm build
+\`\`\`
+
+\`<%= it.schemaScriptPath %>\` is the source of truth. Edit it when replicated components,
+entities, commands, or events change, then run:
+
+\`\`\`sh
+pnpm generate
+\`\`\`
+
+The schema uses endpoint-scoped RPC:
+
+- \`world {}\` is the reserved replicated \`WorldEntity\` for global gameplay state.
+- \`peer {}\` is the framework-created replicated PeerEntity for each connected peer.
+- \`entity Player {}\` is a gameplay entity type with its declared component set.
+
+Commands are received by the endpoint that declares them. Events are emitted by the endpoint that
+declares them. Generated handlers receive \`(world, ctx)\`; \`ctx.payload\` has decoded data,
+\`ctx.source\` is the source endpoint entity, and \`ctx.target\` is the target endpoint entity.
+There is no generated \`ctx.sender\`; call \`world.peerId(peerEntity)\` when logic needs the numeric
+connection id.
 
 ## Commands
 
@@ -182,25 +227,38 @@ browser, Node, Puerts, engine renderer, persistence, login, matchmaking, or prod
 
 ## Ownership
 
-Generated files are written under \`src/generated/snapscript/\` and \`src/systems/generated/\`.
+Generated files are written under \`src/generated/\`.
 Do not edit them directly; change \`<%= it.schemaScriptPath %>\` or system files, then run
 \`pnpm generate\`.
 
 User-owned logic lives in:
 
-- \`src/rpc/server/*.command.ts\` for client-to-server commands.
-- \`src/rpc/client/*.event.ts\` for server-to-client events.
+- \`src/logic/server/*.ts\` for command handlers.
+- \`src/logic/client/*.ts\` for event handlers.
 - \`src/systems/server/*.system.ts\` for authoritative server systems.
 - \`src/systems/client/*.system.ts\` for client-side read/presentation systems.
 
 System files are registered in filename order. Each system file exports
 \`register(world)\`.
 
+Use generated \`commands\` on the client and \`events\` on the server:
+
+\`\`\`ts
+commands.Player.Move(clientWorld, playerEntity, { dx: 1, dy: 0 });
+events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, {
+  disabled: true,
+});
+\`\`\`
+
+Endpoint type validation happens before user handlers run. If a packet targets the wrong endpoint
+type, SnapScript logs a warning and drops it. Gameplay authorization is still user logic; validate
+ownership, cooldowns, possession, and project-specific rules in handlers.
+
 ## Platform Boundary
 
-\`src/transport/memory.ts\` is only for tests and local wiring checks. A real platform layer should
-adapt its transport into SnapScript packets, provide a clock/tick loop, forward input into client
-commands, and render/read snapshots from this core package.
+A real platform layer should adapt its transport into SnapScript packets, provide a clock/tick loop,
+forward input into client commands, and render/read snapshots from this core package. Tests and
+host-mode wiring can use \`createMemoryTransportPair()\` from \`snapscript\`.
 `;
 
 const tsconfigTemplate = `{
@@ -224,10 +282,9 @@ const tsconfigTemplate = `{
 
 const indexTemplate = `export { createClient } from "./create-client";
 export { createServer } from "./create-server";
-export { createMemoryTransportPair } from "./transport/memory";
-export { readClientSnapshot, readServerSnapshot } from "./state";
-export type { ClientSnapshot, ServerSnapshot } from "./state";
-export * from "./generated/snapscript/protocol";
+export { commands } from "./generated/commands";
+export { events } from "./generated/events";
+export * from "./generated/protocol";
 `;
 
 const exampleCreateServerTemplate = `import {
@@ -237,9 +294,9 @@ const exampleCreateServerTemplate = `import {
   type ServerTransport,
   type ServerWorld,
 } from "snapscript";
-import { Player, protocol } from "./generated/snapscript/protocol";
-import { registerServerRpc } from "./generated/snapscript/rpc";
-import { registerServerSystems } from "./systems/generated/server";
+import { Player, protocol } from "./generated/protocol";
+import { registerServerRpc } from "./generated/register";
+import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;
@@ -275,9 +332,9 @@ const genericCreateServerTemplate = `import {
   type ServerTransport,
   type ServerWorld,
 } from "snapscript";
-import { protocol } from "./generated/snapscript/protocol";
-import { registerServerRpc } from "./generated/snapscript/rpc";
-import { registerServerSystems } from "./systems/generated/server";
+import { protocol } from "./generated/protocol";
+import { registerServerRpc } from "./generated/register";
+import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;
@@ -307,9 +364,9 @@ const createClientTemplate = `import {
   type Clock,
   type Logger,
 } from "snapscript";
-import { protocol } from "./generated/snapscript/protocol";
-import { registerClientRpc } from "./generated/snapscript/rpc";
-import { registerClientSystems } from "./systems/generated/client";
+import { protocol } from "./generated/protocol";
+import { registerClientRpc } from "./generated/register";
+import { registerClientSystems } from "./generated/systems.client";
 
 export interface CreateClientOptions {
   readonly transport: ClientTransport;
@@ -332,80 +389,8 @@ export function createClient(options: CreateClientOptions): ClientWorld {
 }
 `;
 
-const exampleStateTemplate = `import type { ClientWorld, ReplicatedStateReader, ServerWorld } from "snapscript";
-import { Health, Position } from "./generated/snapscript/protocol";
-
-export interface PlayerView {
-  readonly id: number;
-  readonly hp: number;
-  readonly x: number;
-  readonly y: number;
-  readonly hidden: boolean;
-  readonly mine: boolean;
-}
-
-export interface ServerSnapshot {
-  readonly players: readonly PlayerView[];
-}
-
-export interface ClientSnapshot {
-  readonly myPeerId: number;
-  readonly players: readonly PlayerView[];
-}
-
-export function readServerSnapshot(world: ServerWorld): ServerSnapshot {
-  return {
-    players: readPlayers(world, () => false),
-  };
-}
-
-export function readClientSnapshot(world: ClientWorld): ClientSnapshot {
-  return {
-    myPeerId: world.myPeerId(),
-    players: readPlayers(world, (id) => world.isMine(id)),
-  };
-}
-
-function readPlayers(
-  world: ReplicatedStateReader,
-  isMine: (entityId: number) => boolean,
-): PlayerView[] {
-  const players: PlayerView[] = [];
-  world.each([Position, Health] as const, (entity, position, health) => {
-    players.push({
-      id: entity.id,
-      hp: health.hp.value,
-      x: position.x.value,
-      y: position.y.value,
-      hidden: position.hidden.value,
-      mine: isMine(entity.id),
-    });
-  });
-  return players;
-}
-`;
-
-const genericStateTemplate = `import type { ClientWorld, ServerWorld } from "snapscript";
-
-export interface ServerSnapshot {
-  readonly tick: number;
-}
-
-export interface ClientSnapshot {
-  readonly myPeerId: number;
-}
-
-export function readServerSnapshot(_world: ServerWorld): ServerSnapshot {
-  return { tick: 0 };
-}
-
-export function readClientSnapshot(world: ClientWorld): ClientSnapshot {
-  return { myPeerId: world.myPeerId() };
-}
-`;
-
 const exampleServerSystemTemplate = `import type { ServerWorld } from "snapscript";
-import { Health } from "../../generated/snapscript/protocol";
+import { Health } from "../../generated/protocol";
 
 export function register(world: ServerWorld): void {
   // Server systems are authoritative gameplay. Phase is fixed by the second argument;
@@ -430,7 +415,7 @@ export function register(world: ServerWorld): void {
 `;
 
 const exampleClientSystemTemplate = `import type { ClientWorld } from "snapscript";
-import { Position } from "../../generated/snapscript/protocol";
+import { Position } from "../../generated/protocol";
 
 export function register(world: ClientWorld): void {
   // Client systems should read replicated state and prepare presentation-facing data.
@@ -454,60 +439,9 @@ export function register(world: ClientWorld): void {
 }
 `;
 
-const memoryTransportTemplate = `import type {
-  ChannelName,
-  ClientTransport,
-  PeerRef,
-  ServerTransport,
-} from "snapscript";
-
-export interface MemoryTransportPair {
-  readonly server: ServerTransport;
-  readonly client: ClientTransport;
-}
-
-export function createMemoryTransportPair(): MemoryTransportPair {
-  const peer: PeerRef = "memory-client";
-  let serverHandler: ((peer: PeerRef, channel: ChannelName, bytes: Uint8Array) => void) | undefined;
-  let clientHandler: ((channel: ChannelName, bytes: Uint8Array) => void) | undefined;
-
-  return {
-    server: {
-      send(_peer, channel, bytes) {
-        clientHandler?.(channel, bytes);
-      },
-      broadcast(channel, bytes) {
-        clientHandler?.(channel, bytes);
-      },
-      onPacket(cb) {
-        serverHandler = cb;
-      },
-      peers() {
-        return [peer];
-      },
-    },
-    client: {
-      send(channel, bytes) {
-        serverHandler?.(peer, channel, bytes);
-      },
-      onPacket(cb) {
-        clientHandler = cb;
-      },
-    },
-  };
-}
-`;
-
-const memoryTransportReadmeTemplate = `# Test Transport
-
-This in-memory transport is only for generated project tests and local wiring checks.
-Production transports belong to the platform layer and should adapt engine, WebSocket, WebRTC, or
-UDP messages into SnapScript \`Uint8Array\` packets with channel labels.
-`;
-
 const exampleRoundtripTestTemplate = `import { describe, expect, it } from "vitest";
-import { createClient, createMemoryTransportPair, createServer, MovementMove, Position } from "../src/index";
-import type { Clock } from "snapscript";
+import { createClient, createServer, Position, commands } from "../src/index";
+import { createMemoryTransportPair, type Clock } from "snapscript";
 
 function clock(): Clock {
   let tick = 0;
@@ -530,22 +464,22 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    client.send(MovementMove, { dx: 1, dy: 0 });
+    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
     server.tick();
     client.tick();
 
     const position = client.get(1, Position);
     expect(client.myPeerId()).toBe(1);
     expect(client.isMine(1)).toBe(true);
-    expect(position?.x.value).toBe(1);
+    expect(position?.x.value).toBe(0);
     expect(position?.y.value).toBe(0);
   });
 });
 `;
 
 const genericRoundtripTestTemplate = `import { describe, expect, it } from "vitest";
-import { createClient, createMemoryTransportPair, createServer } from "../src/index";
-import type { Clock } from "snapscript";
+import { createClient, createServer } from "../src/index";
+import { createMemoryTransportPair, type Clock } from "snapscript";
 
 function clock(): Clock {
   let tick = 0;

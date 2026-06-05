@@ -82,6 +82,8 @@ export type {
   SnapshotHandler,
 } from "./world/index";
 export { defineProtocol } from "./protocol/index";
+export { PeerState, PeerStatus } from "./peer/index";
+export type { PeerStatusValue } from "./peer/index";
 export type {
   DefineProtocolInput,
   ProtocolDefinition,
@@ -91,22 +93,30 @@ export type {
 export { defineCommand, defineEvent } from "./rpc/index";
 export type {
   CommandDefinition,
+  CommandCtx,
+  CommandHandler,
+  CommandValidator,
   EventDefinition,
+  EventCtx,
+  EventHandler,
+  EventValidator,
   RpcCtx,
   RpcDefinition,
   RpcHandler,
   RpcKind,
   RpcOptions,
   RpcPayload,
+  RpcValidationFailure,
 } from "./rpc/index";
 export type {
   ChannelName,
   ClientTransport,
   Clock,
   ILogger,
+  MemoryTransportPair,
   ServerTransport,
   Logger,
   PeerId,
   PeerRef,
 } from "./platform/index";
-export { ServerPeerId } from "./platform/index";
+export { createMemoryTransportPair, ServerPeerId } from "./platform/index";

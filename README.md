@@ -24,26 +24,129 @@ pnpm build
 pnpm test
 ```
 
-## Get Started With `npm create`
+## Get Started
 
-Use this path when you want SnapScript to own the protocol/RPC/system wiring and leave platform
-integration to your own browser, Node, Puerts, or engine project.
+Start with a generated game core package. The core owns replicated protocol, endpoint RPC wiring,
+systems, and tests. Your browser, Node, Puerts, Unity, Unreal, or custom server project owns the
+transport adapter, tick loop, input, rendering, persistence, and deployment.
 
 ```sh
 npm create snapscript@latest my-game-core
 cd my-game-core
 pnpm install
-pnpm generate
-pnpm test
+pnpm build
 ```
 
-The generated package is a platform-neutral game core. It contains:
+The generated package has this shape:
 
-- `game.snap` for replicated components, entities, commands, and events
-- `src/generated/snapscript/` for generated protocol, manifest, hash, and typed RPC facade
-- `src/rpc/server` and `src/rpc/client` for user-owned RPC logic
-- `src/systems/server` and `src/systems/client` for user-owned systems
-- `src/transport/memory.ts` as a test-only transport
+```txt
+my-game-core/
+  game.snap
+  src/
+    generated/              # generated protocol, manifest, command/event facades, registries
+    logic/server/           # command handlers
+    logic/client/           # event handlers
+    systems/                # server/client systems
+    create-server.ts        # assembled server world factory
+    create-client.ts        # assembled client world factory
+```
+
+The source of truth is `game.snap`. Endpoint blocks say which entity can receive commands and which
+entity emits events:
+
+```snap
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+
+world {
+  state: MatchState
+
+  command StartGame() reliable
+  event GameStarted() reliable
+}
+
+component ConnectionInfo {
+  region: u8(0)
+}
+
+peer {
+  connectionInfo: ConnectionInfo
+
+  command Ready() reliable
+  event Alert(reason: u8(0)) reliable
+}
+
+entity Player {
+  position: Position
+  health: Health
+
+  command Move(input: MoveInput) unreliable
+  event MoveDisabled(disabled: bool) reliable
+}
+```
+
+`world {}` maps to the reserved `WorldEntity`. `peer {}` maps to replicated framework-created
+PeerEntity instances. `entity Player {}` maps to gameplay entities that have the declared component
+set. The generated runtime names are endpoint-scoped, for example `World.StartGame`, `Peer.Ready`,
+and `Player.Move`.
+
+Run generation after changing the schema:
+
+```sh
+pnpm generate
+```
+
+Generation overwrites only mechanical files under `src/generated/`. User logic stubs are
+create-only, so edits under `src/logic/` and `src/systems/` are kept.
+
+Use the generated `commands` and `events` facades instead of hand-wiring raw command/event
+definitions:
+
+```ts
+import { commands } from "./generated/commands";
+import { events } from "./generated/events";
+
+commands.Player.Move(clientWorld, playerEntity, {
+  dx: 1,
+  dy: 0,
+});
+
+events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, {
+  disabled: true,
+});
+```
+
+Generated handlers receive a world plus a typed context:
+
+```ts
+import type { CommandCtx, ServerWorld } from "snapscript";
+import { Position, type PlayerMovePayload } from "../../generated/protocol";
+
+export function Move(world: ServerWorld, ctx: CommandCtx<PlayerMovePayload>): void {
+  if (!world.isOwner(ctx.source, ctx.target)) {
+    return;
+  }
+
+  const position = world.get(ctx.target, Position);
+  if (position === undefined) {
+    return;
+  }
+
+  position.x.value += ctx.payload.dx;
+  position.y.value += ctx.payload.dy;
+}
+```
+
+`ctx.source` and `ctx.target` are entity refs. For a client command, `ctx.source` is the sending
+PeerEntity. There is no generated `ctx.sender`; use `world.peerId(ctx.source)` when project logic
+needs the numeric connection id. Peer connection state is replicated on the built-in `PeerState`
+component and exposed through `world.peerStatus(peerEntity)`.
+
+Endpoint type checks happen before user handlers run. If a packet targets the wrong endpoint type,
+for example `Player.Move` with a non-`Player` target, SnapScript logs `logger.warn` and drops it.
+Ownership, cooldowns, possession, and gameplay permissions remain user logic.
 
 To initialize from an existing schema without copying it:
 
@@ -51,10 +154,48 @@ To initialize from an existing schema without copying it:
 npm create snapscript@latest my-game-core -- --schema ../game.snap
 ```
 
-`snapscript generate <schema.snap> --out src/generated/snapscript` refreshes generated protocol,
-RPC registry, system registries, and missing RPC stubs. Existing user RPC logic is kept.
+## Platform Integration
 
-## Get Started With The Runtime API
+Create worlds explicitly in your platform code or generated core helpers:
+
+```ts
+const serverWorld = createServerWorld({
+  protocol,
+  transport: serverTransport,
+  clock,
+});
+
+const clientWorld = createClientWorld({
+  protocol,
+  transport: clientTransport,
+  clock,
+});
+```
+
+The transport adapter only moves `Uint8Array` packets and channel labels. SnapScript does not own
+WebSocket/WebRTC/UDP reliability, input collection, rendering, prediction, matchmaking, accounts, or
+deployment.
+
+Client component refs are read-only. Clients send commands, receive events, run client-only systems,
+and can sample applied snapshots:
+
+```ts
+clientWorld.onSnapshot((world, snapshot) => {
+  for (const [entity, position] of world.query(Position)) {
+    interpolationBuffer.push({
+      id: entity.id,
+      tick: snapshot.tick,
+      x: position.x.value,
+      y: position.y.value,
+    });
+  }
+});
+```
+
+## Direct Runtime API
+
+Most projects should use `.snap` generation. The lower-level runtime API remains available for
+direct integrations, tests, and examples that do not want generated protocol files.
 
 Define replicated state with field helpers and component/entity schemas:
 
@@ -192,6 +333,7 @@ SnapScript owns:
 
 - replicated ECS-style state
 - schema-defined components and prefabs
+- replicated PeerEntity state
 - binary field encoding
 - dirty tracking
 - snapshot encode/apply
@@ -231,10 +373,11 @@ The role is not a later mode switch. Internally, server and client worlds use se
 - `spawn`, `add`, `remove`, and `destroy` replicated entities/components
 - mutate component fields through `NetRef.value`
 - run systems
-- receive commands through `on()`
-- broadcast events through `broadcast()`
-- send events to one peer through `sendTo()`
+- receive generated endpoint commands through `onCommand()` and direct runtime commands through `on()`
+- broadcast generated endpoint events through `broadcastEvent()` and direct runtime events through `broadcast()`
+- send generated endpoint events to PeerEntity refs through `sendEventTo()` / `sendPeerEventTo()`
 - set and query ownership through `setOwner()`, `clearOwner()`, `ownerOf()`, `isOwner()`, and `ownedBy()`
+- map PeerEntity refs with `peerId()` and `peerStatus()`
 - control visibility
 - send full snapshots
 
@@ -243,9 +386,9 @@ The role is not a later mode switch. Internally, server and client worlds use se
 - read replicated components and prefabs
 - query and iterate read-only rows
 - run client systems
-- send commands through `send()`
-- receive events through `on()`
-- read `myPeerId()`, `ownerOf(entity)`, and `isMine(entity)`
+- send generated endpoint commands through `sendCommand()` and direct runtime commands through `send()`
+- receive generated endpoint events through `onEvent()` and direct runtime events through `on()`
+- read `myPeerId()`, `myPeerEntity()`, `peerId(peerEntity)`, `peerStatus(peerEntity)`, `ownerOf(entity)`, and `isMine(entity)`
 - request a full snapshot
 - observe applied snapshots through `onSnapshot()`
 
@@ -253,7 +396,8 @@ World handles are frozen runtime objects. Keep non-replicated server application
 
 ## WorldEntity
 
-`WorldEntity` is the reserved replicated world-level entity:
+`WorldEntity` is the reserved replicated world-level entity. It is SnapScript's GameState-like
+place for global gameplay facts that every client should observe:
 
 ```ts
 import { WorldEntity } from "snapscript";
@@ -269,17 +413,23 @@ serverWorld.add(WorldEntity, MatchState, {
 });
 
 const state = clientWorld.get(WorldEntity, MatchState);
+const sameState = clientWorld.getComponent(MatchState);
 ```
 
 It has `id === 0`, is created automatically by the framework inside every server/client world, is
 always server-owned, and is always visible. User code never spawns or constructs the world entity.
 Use it for replicated global gameplay state such as match phase, round timer, team score, world
-clock, or global match config. Do not use it for logger/cache/db/engine bridge objects; those belong
-to the platform layer.
+clock, or global match config. Server-only rules and orchestration live in systems, RPC handlers, or
+the platform layer, similar to an engine GameMode. Do not use `WorldEntity` for
+logger/cache/db/transport/engine bridge objects; those belong to the platform layer.
 
 `WorldEntity` uses the same component, dirty tracking, snapshot, query, and `each()` paths as normal
 entities. `destroy(WorldEntity)` is forbidden, while server-side `remove(WorldEntity, Component)` is
 allowed to clear a world-level component.
+
+Use `world.getComponent(Component)` as sugar for `world.get(WorldEntity, Component)` when reading
+world-level components. Server worlds return mutable refs; client worlds and shared readers return
+read-only refs.
 
 ## ECS API
 
@@ -287,6 +437,7 @@ The public ECS surface is intentionally small:
 
 - `spawn(schemaOrPrefab?, initial?)`
 - `add(entity, componentOrPrefab, initial?)`
+- `getComponent(component)`
 - `get(entity, componentOrSimpleEntity)`
 - `getPrefab(entity, prefab)`
 - `has(entity, componentOrPrefab)`
@@ -361,49 +512,88 @@ snapscript check examples/protocol/game.snap
 pnpm --dir examples/protocol/core generate
 ```
 
+Endpoint-scoped RPC is declared inside `world {}`, `peer {}`, and `entity Name {}` blocks.
+Endpoint blocks contain component references, commands, and events:
+
+```snap
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+
+world {
+  state: MatchState
+
+  command StartGame() reliable
+  event GameStarted() reliable
+}
+
+component ConnectionInfo {
+  region: u8(0)
+}
+
+peer {
+  connectionInfo: ConnectionInfo
+
+  command Ready() reliable
+  event Alert(reason: u8(0)) reliable
+}
+
+entity Player {
+  position: Position
+  health: Health
+
+  command Move(input: MoveInput) unreliable
+  event MoveDisabled(disabled: bool) reliable
+}
+```
+
 `create-snapscript` initializes a platform-neutral game core package. `snapscript generate` then
-writes generated TypeScript protocol/RPC bindings, system registries, create-only RPC stubs, and a
-manifest from the core package root. The project-style target uses `.snap` declaration order and
+writes generated TypeScript protocol/RPC bindings, system registries, create-only endpoint RPC stubs,
+and a manifest from the core package root. The project-style target uses `.snap` declaration order and
 field order as the generated id source; reordering is a breaking protocol change. See
-[docs/protocol-idl.md](docs/protocol-idl.md), [docs/snapscript-project-style.md](docs/snapscript-project-style.md),
+[docs/protocol-idl.md](docs/protocol-idl.md), [docs/rpc-entity-model.md](docs/rpc-entity-model.md),
 and [examples/protocol/game.snap](examples/protocol/game.snap).
 
 ## RPC
 
-Commands travel client to server:
+In `.snap` projects, commands and events are declared on the endpoint that can receive or emit them:
 
-```ts
-const Jump = defineCommand("Jump", {
-  strength: qf32({ min: 0, max: 1, precision: 0.01, default: 0.5 }),
-});
+```snap
+world {
+  command StartGame() reliable
+  event GameStarted() reliable
+}
 
-clientWorld.send(Jump, { strength: 0.75 });
-serverWorld.on(Jump, (ctx) => {
-  console.log(ctx.payload.strength, ctx.sender);
-});
+peer {
+  command Ready() reliable
+  event Alert(reason: u8) reliable
+}
+
+entity Player {
+  command Move(input: MoveInput) unreliable
+  event MoveDisabled(disabled: bool) reliable
+}
 ```
 
-Events travel server to client:
+The generator creates a typed facade and endpoint handler stubs. Commands travel client to server;
+events travel server to clients:
 
 ```ts
-const TookDamage = defineEvent("TookDamage", {
-  amount: u16(0),
-});
+commands.Player.Move(clientWorld, { id: 1 }, { dx: 1, dy: 0 });
 
-serverWorld.broadcast(TookDamage, { amount: 10 });
-clientWorld.on(TookDamage, (ctx) => {
-  playDamageFx(ctx.payload.amount);
-});
+events.Player.MoveDisabled.broadcast(serverWorld, { id: 1 }, { disabled: true });
+events.Peer.Alert.sendTo(serverWorld, [peerEntity], { reason: 1 });
+events.World.GameStarted.broadcast(serverWorld, {});
 ```
 
-RPC handlers receive one frozen context object. `ctx.payload` is the decoded payload, `ctx.sender` is the SnapScript peer id, `ctx.tick` is the sender tick, and `ctx.channel` is the logical channel used by the packet. Server command handlers receive the client peer id; client event handlers receive `ServerPeerId` (`0`).
+Generated endpoint handlers receive one frozen `CommandCtx<TPayload>` or `EventCtx<TPayload>`.
+`ctx.source` and `ctx.target` are entity refs; there is no generated `ctx.sender`. Peer ids are
+exposed from PeerEntity refs through `world.peerId(peerEntity)`. Peer connection state is replicated
+through the built-in `PeerState` component and can be read with `world.peerStatus(peerEntity)`.
 
-Servers can broadcast an event to every connected client or route it to one peer:
-
-```ts
-serverWorld.broadcast(TookDamage, { amount: 10 });
-serverWorld.sendTo(peerId, TookDamage, { amount: 10 });
-```
+The lower-level `defineCommand()` / `defineEvent()` runtime API remains available for direct
+integrations that do not use `.snap` generation, such as the simple runtime examples.
 
 Handler errors are isolated and logged through `logger.error`. Handlers run from a stable dispatch snapshot, so handlers registered during one dispatch start on a later packet.
 
@@ -411,7 +601,8 @@ Handler errors are isolated and logged through `logger.error`. Handlers run from
 
 `PeerId` is a world-local connection id. `ServerPeerId` is always `0`; client peer ids start at `1` and are assigned by the server during the hello/full-snapshot handshake.
 
-Ownership is internal network metadata, not a component that users add, remove, or query:
+Ownership is internal network metadata, not a component that users add, remove, or query. The vNext
+generated endpoint model uses PeerEntity refs; direct runtime integrations may still use peer ids:
 
 ```ts
 serverWorld.setOwner(player, peerId);

@@ -112,9 +112,12 @@ const hostReader: ReplicatedStateReader = host;
 const clientReader: ReplicatedStateReader = client;
 host.add(WorldEntity, Position);
 host.get(WorldEntity, Position)!.x.value = 1;
+host.getComponent(Position)!.x.value = 1;
 host.has(WorldEntity, Position).valueOf();
 host.remove(WorldEntity, Position);
 client.get(WorldEntity, Position)?.x.value.toFixed();
+client.getComponent(Position)?.x.value.toFixed();
+hostReader.getComponent(Position)?.x.value.toFixed();
 hostReader.each(componentQuery, (_entity, position, velocity) => {
   position.x.value.toFixed();
   velocity.x.value.toFixed();
@@ -153,6 +156,7 @@ if (false) {
       entity.id.toFixed();
       world.has(entity, Position);
       world.get(entity, Position)!.x.value.toFixed();
+      world.getComponent(Position)?.x.value.toFixed();
       // @ts-expect-error interest hook entity refs are read-only policy inputs
       entity.add(Position);
       // @ts-expect-error read-only policy refs are not server-authored EntityRef values
@@ -163,6 +167,8 @@ if (false) {
       world.setVisible(1, entity, true);
       // @ts-expect-error interest world component refs are read-only
       world.get(entity, Position)!.x.value = 1;
+      // @ts-expect-error interest world component refs are read-only
+      world.getComponent(Position)!.x.value = 1;
       return true;
     },
   });
@@ -208,16 +214,16 @@ if (false) {
 
 host.on(Command, (context) => {
   context.payload.amount.toFixed();
-  const peer: PeerId = context.sender;
+  const peer: PeerId = context.source.id;
   peer.toFixed();
 });
 host.broadcast(Event, { amount: 1 });
 host.broadcast(Event);
 if (false) {
   host.sendTo(1, Event, { amount: 1 });
+  client.send(Command, { amount: 1 });
+  client.send(Command);
 }
-client.send(Command, { amount: 1 });
-client.send(Command);
 client.on(Event, (context) => {
   context.payload.amount.toFixed();
 });
@@ -308,12 +314,16 @@ if (false) {
   actorParts.position.missing;
   // @ts-expect-error composite prefabs must be read with getPrefab()
   host.get(actor, Actor);
+  // @ts-expect-error getComponent only accepts component schemas
+  host.getComponent(Actor);
   host.remove(actor, Actor);
   const clientActorParts = client.getPrefab(actor, Actor)!;
   const typedClientActorParts: ReadonlyPrefabInstanceOf<typeof Actor> = clientActorParts;
   typedClientActorParts.position.x.value.toFixed();
   // @ts-expect-error client get exposes read-only NetRefs
   client.get(actor, Position)!.x.value = 1;
+  // @ts-expect-error client getComponent exposes read-only NetRefs
+  client.getComponent(Position)!.x.value = 1;
   // @ts-expect-error client get does not expose local mutation helpers
   client.get(actor, Position)!.x.set(1);
   client.query(Position).forEach(([, pos]) => {

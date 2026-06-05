@@ -1,5 +1,6 @@
 import type { BinaryReader, BinaryWriter } from "../binary/index";
-import type { ChannelName, PeerId } from "../platform/index";
+import type { ChannelName } from "../platform/index";
+import type { EntityRef, ReadonlyEntityRef } from "../world/index";
 import type {
   FieldDefinition,
   FieldDefinitions,
@@ -56,13 +57,53 @@ export interface RpcOptions {
 /** Handler invoked with a frozen RPC context object. */
 export type RpcHandler<TFields extends FieldDefinitions> = (context: RpcCtx<FieldValues<TFields>>) => void;
 
+/** Handler invoked with a frozen command context object. */
+export type CommandHandler<TFields extends FieldDefinitions> = (context: CommandCtx<FieldValues<TFields>>) => void;
+
+/** Handler invoked with a frozen event context object. */
+export type EventHandler<TFields extends FieldDefinitions> = (context: EventCtx<FieldValues<TFields>>) => void;
+
+export interface RpcValidationFailure {
+  readonly reason: string;
+  readonly details?: Record<string, unknown>;
+}
+
+export type CommandValidator<TFields extends FieldDefinitions> = (
+  context: CommandCtx<FieldValues<TFields>>,
+) => RpcValidationFailure | undefined;
+
+export type EventValidator<TFields extends FieldDefinitions> = (
+  context: EventCtx<FieldValues<TFields>>,
+) => RpcValidationFailure | undefined;
+
 /** Runtime context passed to command and event handlers. */
 export interface RpcCtx<TPayload = unknown> {
   readonly payload: Readonly<TPayload>;
   readonly tick: number;
   readonly rpc: RpcDefinition;
   readonly channel: ChannelName;
-  readonly sender: PeerId;
+  readonly source: ReadonlyEntityRef;
+  readonly target: ReadonlyEntityRef;
+}
+
+/** Runtime context passed to client-to-server command handlers. */
+export interface CommandCtx<TPayload = unknown> {
+  readonly payload: Readonly<TPayload>;
+  readonly tick: number;
+  readonly rpc: RpcDefinition;
+  readonly channel: ChannelName;
+  readonly source: ReadonlyEntityRef;
+  readonly target: EntityRef;
+}
+
+/** Runtime context passed to server-to-client event handlers. */
+export interface EventCtx<TPayload = unknown> {
+  readonly payload: Readonly<TPayload>;
+  readonly tick: number;
+  readonly rpc: RpcDefinition;
+  readonly channel: ChannelName;
+  readonly source: ReadonlyEntityRef;
+  readonly target: ReadonlyEntityRef;
 }
 
 export type RpcFieldsInput = Record<string, FieldDefinition<unknown>>;

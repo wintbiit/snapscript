@@ -4,6 +4,8 @@ import * as SnapScript from "../packages/snapscript/src/index";
 
 const expectedValueExports = [
   "ServerPeerId",
+  "PeerState",
+  "PeerStatus",
   "WorldEntity",
   "angle12",
   "angle16",
@@ -12,6 +14,7 @@ const expectedValueExports = [
   "bool",
   "bytesOf",
   "createClientWorld",
+  "createMemoryTransportPair",
   "createServerWorld",
   "defineCommand",
   "defineComponent",

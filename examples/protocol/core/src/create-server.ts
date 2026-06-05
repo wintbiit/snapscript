@@ -5,9 +5,9 @@ import {
   type ServerTransport,
   type ServerWorld,
 } from "snapscript";
-import { Player, protocol } from "./generated/snapscript/protocol";
-import { registerServerRpc } from "./generated/snapscript/rpc";
-import { registerServerSystems } from "./systems/generated/server";
+import { Player, protocol } from "./generated/protocol";
+import { registerServerRpc } from "./generated/register";
+import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;

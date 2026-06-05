@@ -1,5 +1,5 @@
 import type { ServerWorld } from "snapscript";
-import { Health } from "../../generated/snapscript/protocol";
+import { Health } from "../../generated/protocol";
 
 export function register(world: ServerWorld): void {
   world.system("health.clamp", "postUpdate", (world) => {

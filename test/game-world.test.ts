@@ -483,6 +483,7 @@ describe("single world sync api", () => {
     expect(state.phase.value).toBe(1);
     expect(host.add(WorldEntity, MatchState)).toBe(state);
     expect(host.get(WorldEntity, MatchState)).toBe(state);
+    expect(host.getComponent(MatchState)).toBe(state);
     expect(host.has(WorldEntity, MatchState)).toBe(true);
     expect(host.query(MatchState).toArray().map(([entity]) => entity.id)).toEqual([WorldEntity.id]);
 
@@ -496,6 +497,7 @@ describe("single world sync api", () => {
 
     expect(host.remove(WorldEntity, MatchState)).toBe(true);
     expect(host.get(WorldEntity, MatchState)).toBeUndefined();
+    expect(host.getComponent(MatchState)).toBeUndefined();
     expect(() => host.destroy(WorldEntity)).toThrow(/cannot destroy WorldEntity/);
   });
 
@@ -615,12 +617,22 @@ describe("single world sync api", () => {
     expect(() => client.on(Ping as never, () => {})).toThrow(/expects an event/);
     expect(() => host.on(Ping, true as never)).toThrow(/handler must be a function/);
     expect(() => client.on(Flash, true as never)).toThrow(/handler must be a function/);
-    expect(() => client.send(Ping)).not.toThrow();
+    expect(() => client.send(Ping)).toThrow(/before peer assignment/);
     expect(() => host.broadcast(Flash)).not.toThrow();
-    expect(() => client.send(Ping, { amount: 1 } as never)).toThrow(/unknown field "amount"/);
     expect(() => host.broadcast(Flash, { dx: 1 } as never)).toThrow(/unknown field "dx"/);
-    expect(() => client.send(Ping, null as never)).toThrow(/RPC payload must be an object/);
     expect(() => host.broadcast(Flash, [] as never)).toThrow(/RPC payload must be an object/);
+  });
+
+  it("throws when a client sends a command before peer assignment", () => {
+    const Ping = defineCommand("BeforePeerAssignmentPing", {});
+    const protocol = defineProtocol({ commands: { Ping } });
+    const [serverTransport, clientTransport] = pair();
+    createServerWorld({ protocol, transport: serverTransport, clock: clock() });
+    const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
+
+    expect(() => client.myPeerEntity()).toThrow(/before peer assignment/);
+    expect(() => client.send(Ping, {})).toThrow(/before peer assignment/);
+    expect(() => client.sendCommand(WorldEntity, Ping, {})).toThrow(/before peer assignment/);
   });
 
   it("freezes RPC payloads and callback contexts", () => {
@@ -653,10 +665,10 @@ describe("single world sync api", () => {
       expect(() => {
         (context as { channel: ChannelName }).channel = "unreliable";
       }).toThrow();
-      seen.push(`host:${context.payload.dx}:${context.channel}:${context.sender === 0 ? "no-peer" : "peer"}`);
+      seen.push(`host:${context.payload.dx}:${context.channel}:${context.source.id === 0 ? "no-peer" : "peer"}`);
     });
     host.on(Move, (context) => {
-      seen.push(`host2:${context.payload.dx}:${context.channel}:${context.sender === 0 ? "no-peer" : "peer"}`);
+      seen.push(`host2:${context.payload.dx}:${context.channel}:${context.source.id === 0 ? "no-peer" : "peer"}`);
     });
     client.on(Flash, (context) => {
       expect(Object.isFrozen(context.payload)).toBe(true);

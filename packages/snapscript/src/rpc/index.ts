@@ -5,7 +5,13 @@ export type {
 } from "./packet";
 export type {
   CommandDefinition,
+  CommandCtx,
+  CommandHandler,
+  CommandValidator,
   EventDefinition,
+  EventCtx,
+  EventHandler,
+  EventValidator,
   RpcCodec,
   RpcCtx,
   RpcDefinition,
@@ -13,4 +19,5 @@ export type {
   RpcKind,
   RpcOptions,
   RpcPayload,
+  RpcValidationFailure,
 } from "./types";

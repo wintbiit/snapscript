@@ -16,6 +16,7 @@ export interface ControlMessage {
   readonly type: ControlType;
   readonly capabilities: number;
   readonly peerId?: number;
+  readonly peerEntityId?: number;
   readonly protocolHash?: string;
 }
 
@@ -25,6 +26,7 @@ export function encodeControl(
   capabilities = 0,
   peerId?: number,
   protocolHash?: string,
+  peerEntityId?: number,
 ): Uint8Array {
   const writer = new BitWriter();
   writer.writeU8(MessageType.Control);
@@ -32,6 +34,7 @@ export function encodeControl(
   writer.writeU8(type);
   if (type === ControlType.PeerAssigned) {
     writer.writeVarUint(peerId ?? 0);
+    writer.writeVarUint(peerEntityId ?? peerId ?? 0);
     writeOptionalString(writer, protocolHash);
   } else if (capabilities !== 0 || protocolHash !== undefined) {
     writer.writeVarUint(capabilities);
@@ -51,11 +54,13 @@ export function decodeControl(bytes: Uint8Array): ControlMessage {
   const type = reader.readU8() as ControlType;
   if (type === ControlType.PeerAssigned) {
     const peerId = reader.readVarUint();
+    const peerEntityId = reader.remaining() === 0 ? peerId : reader.readVarUint();
     return {
       tick,
       type,
       capabilities: 0,
       peerId,
+      peerEntityId,
       ...optionalProtocolHash(readOptionalString(reader)),
     };
   }

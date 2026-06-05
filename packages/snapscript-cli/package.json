@@ -25,7 +25,8 @@
   },
   "dependencies": {
     "eta": "^4.6.0",
-    "peggy": "^5.1.0"
+    "peggy": "^5.1.0",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createClientWorld,
+  createServerWorld,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -17,10 +19,13 @@ import {
   type PeerRef,
   type Logger,
   type ServerTransport,
+  PeerState,
+  PeerStatus,
   ServerPeerId,
   WorldEntity,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
+import { decodeRpc } from "../packages/snapscript/src/rpc/index";
 import { createSyncClient, createSyncServer } from "../packages/snapscript/src/runtime/index";
 import { BitReader } from "../packages/snapscript/src/binary/index";
 import {
@@ -36,6 +41,7 @@ import { createTestClientWorld, createTestServerWorld, testProtocol } from "./he
 
 class ManualTransport implements ClientTransport, ServerTransport {
   peer?: ManualTransport;
+  connected = true;
   readonly packets: Uint8Array[] = [];
   readonly peerId: PeerRef = {};
   #clientHandler?: (channel: ChannelName, bytes: Uint8Array) => void;
@@ -69,7 +75,7 @@ class ManualTransport implements ClientTransport, ServerTransport {
   }
 
   peers(): Iterable<PeerRef> {
-    return [this.peerId];
+    return this.connected && this.peer !== undefined ? [this.peer.peerId] : [];
   }
 
   receive(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void {
@@ -306,7 +312,7 @@ describe("sync runtime", () => {
     expect(clientWorld.get(player.id, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
   });
 
-  it("assigns peer ids and exposes them through RPC ctx", () => {
+  it("assigns peer entities and exposes them through RPC ctx", () => {
     const Move = defineCommand("RuntimePeerCtxMove", {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
     });
@@ -325,13 +331,13 @@ describe("sync runtime", () => {
       clock: clock(),
       registry,
     });
-    let commandSender = ServerPeerId;
-    let eventSender = -1;
+    let commandSource = ServerPeerId;
+    let eventSource = -1;
     host.on(Move, (ctx) => {
-      commandSender = ctx.sender;
+      commandSource = ctx.source.id;
     });
     client.on(Damage, (ctx) => {
-      eventSender = ctx.sender;
+      eventSource = ctx.source.id;
     });
 
     client.start();
@@ -339,9 +345,102 @@ describe("sync runtime", () => {
     host.sendTo(1, Damage, { amount: 7 });
 
     expect(client.peerId()).toBe(1);
-    expect(commandSender).toBe(1);
-    expect(eventSender).toBe(ServerPeerId);
+    expect(commandSource).toBe(1);
+    expect(eventSource).toBe(ServerPeerId);
     expect(() => host.sendTo(99, Damage, { amount: 1 })).toThrow(/unknown peer 99/);
+  });
+
+  it("replicates PeerEntity and maps it back to peer ids", () => {
+    const Peer = defineEntity("Peer", { peerState: PeerState }, { id: 0 });
+    const Ping = defineCommand("RuntimePeerEntityPing", {});
+    const protocol = testProtocol(PeerState, Peer, Ping);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+    });
+    const gameplayEntity = serverWorld.spawn();
+    let sourceId = 0;
+    let sourcePeerId = 0;
+
+    serverWorld.onCommand(Ping, (ctx) => {
+      sourceId = ctx.source.id;
+      sourcePeerId = serverWorld.peerId(ctx.source);
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    const peerEntity = clientWorld.myPeerEntity();
+    expect(clientWorld.myPeerId()).toBe(1);
+    expect(peerEntity.id).not.toBe(gameplayEntity.id);
+    expect(clientWorld.peerId(peerEntity)).toBe(1);
+    expect(clientWorld.has(peerEntity, Peer)).toBe(true);
+    expect(clientWorld.get(peerEntity, PeerState)?.peerId.value).toBe(1);
+
+    clientWorld.sendCommand(WorldEntity, Ping, {});
+    serverWorld.tick();
+
+    expect(sourceId).toBe(peerEntity.id);
+    expect(sourcePeerId).toBe(1);
+    expect(serverWorld.has({ id: sourceId }, Peer)).toBe(true);
+
+    serverTransport.connected = false;
+    serverWorld.tick();
+    expect(serverWorld.peerStatus({ id: sourceId })).toBe(PeerStatus.Disconnected);
+    expect(serverWorld.get({ id: sourceId }, PeerState)?.status.value).toBe(PeerStatus.Disconnected);
+  });
+
+  it("warns and drops RPCs when an endpoint validator fails", () => {
+    const Move = defineCommand("RuntimeValidatedMove", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const registry = createRegistry().registerRpc(Move);
+    const protocol = testProtocol(Move);
+    const logger: Logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const serverWorld = createTestServerWorld(protocol);
+    const clientWorld = createTestClientWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+      logger,
+    });
+    const client = createSyncClient({
+      world: clientWorld,
+      transport: clientTransport,
+      clock: clock(),
+      registry,
+    });
+    const handler = vi.fn();
+
+    host.onCommand(Move, handler, () => ({
+      reason: "endpoint entity type mismatch",
+      details: { endpoint: "Player" },
+    }));
+
+    client.start();
+    client.sendCommand(WorldEntity.id, Move, { dx: 0.5 });
+    host.update();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("RPC packet dropped", expect.objectContaining({
+      endpoint: "Player",
+      reason: "endpoint entity type mismatch",
+      rpc: Move.name,
+    }));
   });
 
   it("syncs ownership in full snapshots and dirty structural updates", () => {
@@ -408,15 +507,18 @@ describe("sync runtime", () => {
     expect(client.peerId()).toBe(1);
     expect(clientWorld.ownerOf(WorldEntity)).toBe(ServerPeerId);
     expect(clientWorld.get(WorldEntity, MatchState)?.phase.value).toBe(1);
+    expect(clientWorld.getComponent(MatchState)?.phase.value).toBe(1);
 
     serverState.phase.value = 2;
     host.update();
     expect(clientWorld.get(WorldEntity, MatchState)?.phase.value).toBe(2);
+    expect(clientWorld.getComponent(MatchState)?.phase.value).toBe(2);
     expect(worldInternals(clientWorld).getDirtyMask(WorldEntity.id)).toBe(0);
 
     serverWorld.remove(WorldEntity, MatchState);
     host.update();
     expect(clientWorld.get(WorldEntity, MatchState)).toBeUndefined();
+    expect(clientWorld.getComponent(MatchState)).toBeUndefined();
     expect(clientWorld.ownerOf(WorldEntity)).toBe(ServerPeerId);
   });
 
@@ -700,6 +802,89 @@ describe("sync runtime", () => {
     applySnapshot(hiddenClient, hiddenPacket!.bytes, registry);
     expect(visibleClient.get(player, PlayerState)?.hp.value).toBe(100);
     expect(hiddenClient.get(player, PlayerState)).toBeUndefined();
+  });
+
+  it("filters endpoint event broadcast by source visibility but keeps WorldEntity events global", () => {
+    const Player = defineEntity("RuntimeVisibleEventPlayer", {
+      hp: u16(100),
+    });
+    const PlayerState = Player.component;
+    const Flash = defineEvent("RuntimeVisibleEventFlash", {
+      amount: u16(0),
+    });
+    const WorldFlash = defineEvent("RuntimeVisibleWorldEventFlash", {
+      amount: u16(0),
+    });
+    const registry = createRegistry().registerComponent(PlayerState).registerRpc(Flash).registerRpc(WorldFlash);
+    const protocol = testProtocol(Player, Flash, WorldFlash);
+    const serverWorld = createTestServerWorld(protocol);
+    const player = serverWorld.spawn(Player);
+    const transport = new PeerServerTransport();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport,
+      clock: clock(),
+      registry,
+      isVisible: (peerId, entityId) => entityId !== player.id || peerId === 1,
+    });
+
+    transport.receive("peer-a", "reliable", encodeControl(ControlType.Hello, 1));
+    transport.receive("peer-b", "reliable", encodeControl(ControlType.Hello, 2));
+    transport.sent.splice(0);
+
+    host.broadcastEvent(player.id, Flash, { amount: 7 });
+    expect(transport.sent.map((packet) => packet.peer)).toEqual(["peer-a"]);
+    expect(decodeRpc(transport.sent[0]!.bytes, registry).sourceId).toBe(player.id);
+
+    transport.sent.splice(0);
+    host.broadcastEvent(WorldEntity.id, WorldFlash, { amount: 9 });
+    expect(transport.sent.map((packet) => packet.peer).sort()).toEqual(["peer-a", "peer-b"]);
+  });
+
+  it("broadcasts peer endpoint events from each receiving PeerEntity", () => {
+    const Peer = defineEntity("Peer", { peerState: PeerState }, { id: 0 });
+    const Alert = defineEvent("RuntimePeerBroadcastAlert", {
+      reason: u8(0),
+    });
+    const registry = createRegistry().registerComponent(PeerState).registerRpc(Alert);
+    const protocol = testProtocol(PeerState, Peer, Alert);
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: new PeerServerTransport(),
+      clock: clock(),
+    });
+    const transport = new PeerServerTransport();
+    const peerEntities = new Map<number, number>();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport,
+      clock: clock(),
+      registry,
+      ensurePeerEntity(peerId) {
+        const existing = peerEntities.get(peerId);
+        if (existing !== undefined) return existing;
+        const peerEntity = serverWorld.spawn(Peer, {
+          peerState: { peerId, status: PeerStatus.Connected },
+        });
+        peerEntities.set(peerId, peerEntity.id);
+        return peerEntity.id;
+      },
+    });
+
+    transport.receive("peer-a", "reliable", encodeControl(ControlType.Hello, 1));
+    const peerAEntityId = decodeControl(transport.sent[0]!.bytes).peerEntityId!;
+    transport.receive("peer-b", "reliable", encodeControl(ControlType.Hello, 2));
+    const peerBEntityId = decodeControl(transport.sent.find((packet) => packet.peer === "peer-b")!.bytes).peerEntityId!;
+    transport.sent.splice(0);
+
+    host.broadcastPeerEvent(Alert, { reason: 3 });
+
+    expect(transport.sent.map((packet) => packet.peer).sort()).toEqual(["peer-a", "peer-b"]);
+    const byPeer = new Map(transport.sent.map((packet) => [packet.peer, decodeRpc(packet.bytes, registry)]));
+    expect(byPeer.get("peer-a")?.sourceId).toBe(peerAEntityId);
+    expect(byPeer.get("peer-a")?.targetId).toBe(peerAEntityId);
+    expect(byPeer.get("peer-b")?.sourceId).toBe(peerBEntityId);
+    expect(byPeer.get("peer-b")?.targetId).toBe(peerBEntityId);
   });
 
   it("uses full snapshots to reconcile stale peer state", () => {

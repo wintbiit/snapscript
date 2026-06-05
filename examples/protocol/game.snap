@@ -1,5 +1,28 @@
 syntax = "v1"
 
+component MatchState {
+  phase: u8(0)
+  timeLeftMs: u32(0)
+}
+
+world {
+  state: MatchState
+
+  command StartGame() reliable
+  event GameStarted() reliable
+}
+
+component ConnectionInfo {
+  region: u8(0)
+}
+
+peer {
+  connectionInfo: ConnectionInfo
+
+  command Ready() reliable
+  event Alert(reason: u8(0)) reliable
+}
+
 struct Vector2 {
   x: qf32(min: -128, max: 128, precision: 0.01, default: 0)
   y: qf32(min: -128, max: 128, precision: 0.01, default: 0)
@@ -14,17 +37,15 @@ component Health {
   hp: u16(100)
 }
 
-entity Player {
-  position: Position
-  health: Health
-}
-
 struct MoveInput {
   dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
   dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
 }
 
-service Movement {
+entity Player {
+  position: Position
+  health: Health
+
   command Move(input: MoveInput) unreliable
   event MoveDisabled(disabled: bool) reliable
 }

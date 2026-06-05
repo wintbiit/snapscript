@@ -14,15 +14,20 @@ component Position {
 component Health {
   hp: u16(100)
 }
-entity Player {
-  position: Position
-  health: Health
+component MatchState {
+  phase: u8(0)
+}
+world {
+  state: MatchState
 }
 struct MoveInput {
   dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
   dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
 }
-service Movement {
+entity Player {
+  position: Position
+  health: Health
+
   command Move(input: MoveInput) unreliable
   event MoveDisabled(disabled: bool) reliable
 }
@@ -43,15 +48,21 @@ describe("snapscript project generation", () => {
       expect(readFileSync(join(root, "game.snap"), "utf8")).toContain('syntax = "v1"');
       expect(readFileSync(join(root, "README.md"), "utf8")).toContain("pnpm generate");
       expect(readFileSync(join(root, "README.md"), "utf8")).toContain("platform-neutral SnapScript game core");
-      expect(readFileSync(join(root, "package.json"), "utf8")).toContain("snapscript generate game.snap");
-      expect(readFileSync(join(root, "src/generated/snapscript/rpc.ts"), "utf8")).toContain(
-        'from "../../rpc/server/move.command"',
+      expect(readFileSync(join(root, "package.json"), "utf8")).toContain("snapscript generate game.snap --out src/generated");
+      expect(readFileSync(join(root, "src/generated/register.ts"), "utf8")).toContain(
+        'from "../logic/server/Player"',
       );
-      expect(readFileSync(join(root, "src/rpc/server/move.command.ts"), "utf8")).toContain(
-        "export function moveCommand",
+      expect(readFileSync(join(root, "src/generated/commands.ts"), "utf8")).toContain(
+        "commands =",
       );
-      expect(readFileSync(join(root, "src/systems/generated/server.ts"), "utf8")).toContain(
-        'from "../server/10-health.system"',
+      expect(() => readFileSync(join(root, "src/generated/snapscript/protocol.ts"), "utf8")).toThrow();
+      expect(() => readFileSync(join(root, "src/state.ts"), "utf8")).toThrow();
+      expect(() => readFileSync(join(root, "src/transport/memory.ts"), "utf8")).toThrow();
+      expect(readFileSync(join(root, "src/logic/server/Player.ts"), "utf8")).toContain(
+        "export function Move",
+      );
+      expect(readFileSync(join(root, "src/generated/systems.server.ts"), "utf8")).toContain(
+        'from "../systems/server/10-health.system"',
       );
       expect(report.some((item) => item.status === "created" && item.path.endsWith("game.snap"))).toBe(true);
     });
@@ -67,10 +78,11 @@ describe("snapscript project generation", () => {
       const test = readFileSync(join(dir, "core", "test/roundtrip.test.ts"), "utf8");
 
       expect(packageJson).toContain("snapscript check ../external.snap");
-      expect(packageJson).toContain("snapscript generate ../external.snap --out src/generated/snapscript");
+      expect(packageJson).toContain("snapscript generate ../external.snap --out src/generated");
       expect(readme).toContain("../external.snap");
       expect(createServer).not.toContain("Player");
       expect(test).not.toContain("MovementMove");
+      expect(() => readFileSync(join(dir, "core", "src/generated/snapscript/protocol.ts"), "utf8")).toThrow();
       expect(() => readFileSync(join(dir, "core", "game.snap"), "utf8")).toThrow();
     });
   });
@@ -89,44 +101,43 @@ describe("snapscript project generation", () => {
   it("keeps existing RPC stubs and reports stale files", () => {
     usingTempDir((dir) => {
       writeFileSync(join(dir, "game.snap"), schema);
-      generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated/snapscript" });
-      writeFileSync(join(dir, "src/rpc/server/move.command.ts"), "USER EDIT");
-      writeFileSync(join(dir, "src/rpc/server/old.command.ts"), "STALE");
+      generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated" });
+      writeFileSync(join(dir, "src/logic/server/Player.ts"), "export function Move() {}\nexport function OldCommand() {}\n");
 
-      const report = generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated/snapscript" });
+      const report = generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated" });
 
-      expect(readFileSync(join(dir, "src/rpc/server/move.command.ts"), "utf8")).toBe("USER EDIT");
-      expect(report).toContainEqual({ status: "kept", path: "src/rpc/server/move.command.ts" });
-      expect(report).toContainEqual({ status: "stale", path: "src/rpc/server/old.command.ts" });
+      expect(readFileSync(join(dir, "src/logic/server/Player.ts"), "utf8")).toBe("export function Move() {}\nexport function OldCommand() {}\n");
+      expect(report).toContainEqual({ status: "kept", path: "src/logic/server/Player.ts" });
+      expect(report).toContainEqual({ status: "stale", path: "src/logic/server/Player.ts#OldCommand" });
     });
   });
 
-  it("rejects RPC stub file collisions", () => {
+  it("allows endpoint-scoped RPCs with the same local name", () => {
     usingTempDir((dir) => {
       writeFileSync(
         join(dir, "game.snap"),
         `syntax = "v1"
-service A {
+entity A {
   command Move(dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)) unreliable
 }
-service B {
+entity B {
   command Move(dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)) unreliable
 }
 `,
       );
 
-      expect(() => generateProject({ cwd: dir, schemaPath: "game.snap" })).toThrow(/RPC file name collision/);
+      expect(() => generateProject({ cwd: dir, schemaPath: "game.snap" })).not.toThrow();
     });
   });
 
   it("rejects system files that do not export register", () => {
     usingTempDir((dir) => {
       writeFileSync(join(dir, "game.snap"), schema);
-      generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated/snapscript" });
+      generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated" });
       mkdirSync(join(dir, "src/systems/server"), { recursive: true });
       writeFileSync(join(dir, "src/systems/server/20-bad.system.ts"), "export const nope = 1;\n");
 
-      expect(() => generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated/snapscript" })).toThrow(
+      expect(() => generateProject({ cwd: dir, schemaPath: "game.snap", outDir: "src/generated" })).toThrow(
         /must export register/,
       );
     });
