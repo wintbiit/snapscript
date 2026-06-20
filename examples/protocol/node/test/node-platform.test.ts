@@ -1,4 +1,4 @@
-import { commands, createClient, createServer, Position } from "@snapscript/example-protocol-core";
+import { commands, createClient, createServer, entities, Position } from "@snapscript/example-protocol-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeClock, NodeWebSocketClientTransport, NodeWebSocketServerTransport } from "../src/index";
 
@@ -25,7 +25,9 @@ describe("node protocol platform", () => {
     await wait(25);
     client.tick();
 
-    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
+    const playerEntity = entities.Player.first(client);
+    if (playerEntity === undefined) throw new Error("expected a replicated Player");
+    commands.Player.Move(client, playerEntity, { dx: 1, dy: 0 });
     await wait(25);
     server.tick();
     await wait(25);

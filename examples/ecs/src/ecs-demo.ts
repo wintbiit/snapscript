@@ -2,6 +2,7 @@ import {
   bool,
   createClientWorld,
   createServerWorld,
+  WorldEntity,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -284,7 +285,7 @@ export class ServerDemo {
       });
     });
 
-    this.world.on(MoveCommand, (ctx) => {
+    this.world.onCommand(MoveCommand, (ctx) => {
       // Commands are intent; the server decides how intent changes replicated state.
       const payload = ctx.payload;
       const vel = this.world.get(this.player, Velocity);
@@ -294,7 +295,7 @@ export class ServerDemo {
       }
     });
 
-    this.world.on(DamageCommand, (ctx) => {
+    this.world.onCommand(DamageCommand, (ctx) => {
       const payload = ctx.payload;
       const target = this.world.get(payload.target || this.player.id, Health);
       if (target === undefined) {
@@ -303,7 +304,7 @@ export class ServerDemo {
       target.hp.value = Math.max(0, target.hp.value - payload.amount);
       target.dead.value = target.hp.value <= 0;
       this.#lastEvent = `damage ${payload.amount} on #${payload.target || this.player.id}`;
-      this.world.broadcast(DamageEvent, {
+      this.world.broadcastEvent(WorldEntity, DamageEvent, {
         entityId: payload.target || this.player.id,
         amount: payload.amount,
       });
@@ -370,7 +371,7 @@ export class ClientDemo {
     this.clock = clock;
     this.world = createClientWorld({ protocol, transport: this.#transport, clock: this.clock });
 
-    this.world.on(DamageEvent, (ctx) => {
+    this.world.onEvent(DamageEvent, (ctx) => {
       const payload = ctx.payload;
       // Events are side-channel notifications; component truth still comes from snapshots.
       this.#lastEvent = `damage fx ${payload.amount} on #${payload.entityId}`;
@@ -386,11 +387,11 @@ export class ClientDemo {
   }
 
   move(dx: number, dy: number): void {
-    this.world.send(MoveCommand, { dx, dy });
+    this.world.sendCommand(WorldEntity, MoveCommand, { dx, dy });
   }
 
   damage(target = 1): void {
-    this.world.send(DamageCommand, { target, amount: 10 });
+    this.world.sendCommand(WorldEntity, DamageCommand, { target, amount: 10 });
   }
 
   requestFull(): void {

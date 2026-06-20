@@ -12,6 +12,7 @@ export function registerServerRpc(world: ServerWorld): void {
   internal.World.commands.StartGame.on(world, (ctx) => serverWorld.StartGame(world, ctx));
   internal.Peer.commands.Ready.on(world, (ctx) => serverPeer.Ready(world, ctx));
   internal.Player.commands.Move.on(world, (ctx) => serverPlayer.Move(world, ctx));
+  internal.Player.streams.MoveStream.on(world, (ctx) => serverPlayer.MoveStream(world, ctx));
 }
 
 export function registerClientRpc(world: ClientWorld): void {

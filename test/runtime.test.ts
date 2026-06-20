@@ -6,6 +6,7 @@ import {
   defineComponent,
   defineEntity,
   defineEvent,
+  defineStream,
   arrayOf,
   bytesOf,
   qf32,
@@ -25,7 +26,7 @@ import {
   WorldEntity,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
-import { decodeRpc } from "../packages/snapscript/src/rpc/index";
+import { decodeCommandStreamAck, decodeRpc } from "../packages/snapscript/src/rpc/index";
 import { createSyncClient, createSyncServer } from "../packages/snapscript/src/runtime/index";
 import { BitReader } from "../packages/snapscript/src/binary/index";
 import {
@@ -398,6 +399,177 @@ describe("sync runtime", () => {
     expect(serverWorld.get({ id: sourceId }, PeerState)?.status.value).toBe(PeerStatus.Disconnected);
   });
 
+  it("dispatches command stream batches and acknowledges processed samples", () => {
+    const Player = defineEntity("RuntimeStreamPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStream", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    serverWorld.onCommandStream(MoveStream, (ctx) => {
+      batches.push(
+        `${ctx.source.id}->${ctx.target.id}:${ctx.samples
+          .map((sample) => `${sample.sequence}/${sample.clientTick}/${sample.dtMs}/${sample.payload.dx}`)
+          .join(",")}`,
+      );
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
+    expect(batches).toEqual([]);
+    clientWorld.tick();
+    serverWorld.tick();
+
+    expect(batches).toEqual([
+      `${clientWorld.myPeerEntity().id}->${player.id}:1/10/16/0.25,2/11/16/0.5`,
+    ]);
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.75 }, 12, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+    const ack = decodeCommandStreamAck(serverTransport.packets.at(-1)!);
+    expect(ack.streamId).toBe(MoveStream.rpcId);
+    expect(ack.targetId).toBe(player.id);
+    expect(ack.lastProcessedSequence).toBe(3);
+  });
+
+
+  it("enforces maxStreamsPerPeer limit", () => {
+    const Player = defineEntity("RuntimeStreamLimitPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamLimit", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+      streamLimits: { maxStreamsPerPeer: 1 },
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+      streamLimits: { maxStreamsPerPeer: 1 },
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    serverWorld.onCommandStream(MoveStream, (ctx) => {
+      batches.push(`stream:${ctx.stream.name}`);
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+
+    expect(batches).toEqual(["stream:RuntimeMoveStreamLimit"]);
+  });
+
+  it("enforces maxPendingSamples limit", () => {
+    const Player = defineEntity("RuntimeStreamPendingPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamPending", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+      streamLimits: { maxPendingSamples: 2 },
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+      streamLimits: { maxPendingSamples: 2 },
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    serverWorld.onCommandStream(MoveStream, (ctx) => {
+      batches.push(`samples:${ctx.samples.length}`);
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.75 }, 12, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+
+    expect(batches).toEqual(["samples:2"]);
+  });
+
+  it("truncates samples per packet to maxSamplesPerPacket", () => {
+    const Player = defineEntity("RuntimeStreamPacketPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamPacket", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+      streamLimits: { maxSamplesPerPacket: 1 },
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+      streamLimits: { maxSamplesPerPacket: 1 },
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    serverWorld.onCommandStream(MoveStream, (ctx) => {
+      batches.push(
+        ctx.samples.map((s) => `${s.sequence}/${s.payload.dx}`).join(","),
+      );
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+
+    expect(batches).toEqual(["2/0.5"]);
+  });
   it("warns and drops RPCs when an endpoint validator fails", () => {
     const Move = defineCommand("RuntimeValidatedMove", {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
@@ -1032,3 +1204,5 @@ describe("sync runtime", () => {
     expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
   });
 });
+
+

@@ -17,9 +17,10 @@ import type {
   RpcDefinition,
   RpcKind,
   RpcOptions,
+  StreamDefinition,
 } from "./types";
 
-/** Defines a client-to-server RPC command. Commands are sent with `clientWorld.send()` and handled by `serverWorld.on()`. */
+/** Defines a client-to-server RPC command. Commands are sent with `clientWorld.sendCommand()` and handled by `serverWorld.onCommand()`. */
 export function defineCommand<TFields extends FieldDefinitions>(
   name: string,
   fields: TFields,
@@ -28,13 +29,22 @@ export function defineCommand<TFields extends FieldDefinitions>(
   return defineRpc("command", name, fields, options) as CommandDefinition<TFields>;
 }
 
-/** Defines a server-to-client RPC event. Events are sent with `serverWorld.broadcast()` and handled by `clientWorld.on()`. */
+/** Defines a server-to-client RPC event. Events are sent with `serverWorld.broadcastEvent()` or `sendEventTo()` and handled by `clientWorld.onEvent()`. */
 export function defineEvent<TFields extends FieldDefinitions>(
   name: string,
   fields: TFields,
   options?: RpcOptions,
 ): EventDefinition<TFields> {
   return defineRpc("event", name, fields, options) as EventDefinition<TFields>;
+}
+
+/** Defines a client-to-server command stream. Streams use the unreliable transport channel internally. */
+export function defineStream<TFields extends FieldDefinitions>(
+  name: string,
+  fields: TFields,
+  options?: Omit<RpcOptions, "channel">,
+): StreamDefinition<TFields> {
+  return defineRpc("stream", name, fields, { ...options, channel: "unreliable" }) as StreamDefinition<TFields>;
 }
 
 function defineRpc<TFields extends FieldDefinitions>(

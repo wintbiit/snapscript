@@ -90,23 +90,26 @@ export type {
   ProtocolManifest,
   ProtocolManifestEntry,
 } from "./protocol/index";
-export { defineCommand, defineEvent } from "./rpc/index";
+export { defineCommand, defineEvent, defineStream } from "./rpc/index";
 export type {
   CommandDefinition,
   CommandCtx,
   CommandHandler,
+  CommandStreamCtx,
+  CommandStreamHandler,
+  CommandStreamSample,
+  CommandStreamValidator,
   CommandValidator,
   EventDefinition,
   EventCtx,
   EventHandler,
   EventValidator,
-  RpcCtx,
   RpcDefinition,
-  RpcHandler,
   RpcKind,
   RpcOptions,
   RpcPayload,
   RpcValidationFailure,
+  StreamDefinition,
 } from "./rpc/index";
 export type {
   ChannelName,

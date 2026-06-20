@@ -43,7 +43,7 @@ The generated package has this shape:
 my-game-core/
   game.snap
   src/
-    generated/              # generated protocol, manifest, command/event facades, registries
+    generated/              # generated protocol, manifest, facade files, registries
     logic/server/           # command handlers
     logic/client/           # event handlers
     systems/                # server/client systems
@@ -51,10 +51,15 @@ my-game-core/
     create-client.ts        # assembled client world factory
 ```
 
-The source of truth is `game.snap`. Endpoint blocks say which entity can receive commands and which
-entity emits events:
+The source of truth is `game.snap`. RPC is declared inside endpoint blocks. The endpoint tells
+SnapScript which entity the RPC is addressed to or emitted from:
 
 ```snap
+struct MoveInput {
+  dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
+  dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
+}
+
 component MatchState {
   phase: u8(0)
   timeLeftMs: u32(0)
@@ -83,14 +88,28 @@ entity Player {
   health: Health
 
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }
 ```
 
-`world {}` maps to the reserved `WorldEntity`. `peer {}` maps to replicated framework-created
-PeerEntity instances. `entity Player {}` maps to gameplay entities that have the declared component
-set. The generated runtime names are endpoint-scoped, for example `World.StartGame`, `Peer.Ready`,
-and `Player.Move`.
+Endpoint blocks have fixed runtime meaning:
+
+- `world {}` maps to the reserved `WorldEntity`.
+- `peer {}` maps to replicated framework-created PeerEntity instances.
+- `entity Player {}` maps to gameplay entities that have the declared component set.
+
+RPC declarations are directional:
+
+- `command` travels client to server. Its `source` is the sending PeerEntity and its `target` is the
+  declared endpoint entity.
+- `event` travels server to client. Its `source` is `WorldEntity`, a PeerEntity, or a gameplay
+  entity, and its `target` is the receiving PeerEntity.
+- `stream` travels client to server as an unreliable sample stream. It is flushed during
+  `ClientWorld.tick()` after the `network` phase.
+
+The generated runtime names are endpoint-scoped, for example `World.StartGame`, `Peer.Ready`, and
+`Player.Move`.
 
 Run generation after changing the schema:
 
@@ -101,12 +120,16 @@ pnpm generate
 Generation overwrites only mechanical files under `src/generated/`. User logic stubs are
 create-only, so edits under `src/logic/` and `src/systems/` are kept.
 
-Use the generated `commands` and `events` facades instead of hand-wiring raw command/event
-definitions:
+Use the generated `commands`, `events`, `streams`, and `entities` facades:
 
 ```ts
 import { commands } from "./generated/commands";
+import { entities } from "./generated/entities";
 import { events } from "./generated/events";
+import { streams } from "./generated/streams";
+
+const playerEntity = entities.Player.first(clientWorld);
+if (playerEntity === undefined) throw new Error("Player is not replicated yet");
 
 commands.Player.Move(clientWorld, playerEntity, {
   dx: 1,
@@ -116,7 +139,17 @@ commands.Player.Move(clientWorld, playerEntity, {
 events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, {
   disabled: true,
 });
+
+streams.Player.MoveStream(clientWorld, playerEntity, {
+  dx: 1,
+  dy: 0,
+}, clientTick, dtMs);
 ```
+
+`entities.Player.first()` and `entities.Player.firstMine()` read entity refs from replicated client
+state, so application code does not need to construct `{ id }` objects. `events.*.sendTo()` accepts
+PeerEntity refs, not raw peer ids. Stream calls enqueue samples; dirty streams are batched and sent
+during `ClientWorld.tick()`.
 
 Generated handlers receive a world plus a typed context:
 
@@ -203,6 +236,7 @@ Define replicated state with field helpers and component/entity schemas:
 import {
   createClientWorld,
   createServerWorld,
+  WorldEntity,
   defineCommand,
   defineComponent,
   defineEntity,
@@ -268,7 +302,7 @@ const player = serverWorld.spawn(Player, {
   health: { hp: 100 },
 });
 
-serverWorld.on(Move, (ctx) => {
+serverWorld.onCommand(Move, (ctx) => {
   const position = serverWorld.get(player, Position);
   if (position === undefined) {
     return;
@@ -283,7 +317,7 @@ serverWorld.system("movement", "update", (world) => {
   });
 });
 
-clientWorld.send(Move, { dx: 1, dy: 0 });
+clientWorld.sendCommand(WorldEntity, Move, { dx: 1, dy: 0 });
 
 serverWorld.tick();
 clientWorld.tick();
@@ -337,7 +371,7 @@ SnapScript owns:
 - binary field encoding
 - dirty tracking
 - snapshot encode/apply
-- command/event packet encoding
+- command/event/stream packet encoding
 - world-local peer ids and entity ownership metadata
 - server/client world runtime
 - optional visibility filtering
@@ -373,8 +407,8 @@ The role is not a later mode switch. Internally, server and client worlds use se
 - `spawn`, `add`, `remove`, and `destroy` replicated entities/components
 - mutate component fields through `NetRef.value`
 - run systems
-- receive generated endpoint commands through `onCommand()` and direct runtime commands through `on()`
-- broadcast generated endpoint events through `broadcastEvent()` and direct runtime events through `broadcast()`
+- receive endpoint-addressed commands through `onCommand()`
+- broadcast endpoint-addressed events through `broadcastEvent()`
 - send generated endpoint events to PeerEntity refs through `sendEventTo()` / `sendPeerEventTo()`
 - set and query ownership through `setOwner()`, `clearOwner()`, `ownerOf()`, `isOwner()`, and `ownedBy()`
 - map PeerEntity refs with `peerId()` and `peerStatus()`
@@ -386,8 +420,8 @@ The role is not a later mode switch. Internally, server and client worlds use se
 - read replicated components and prefabs
 - query and iterate read-only rows
 - run client systems
-- send generated endpoint commands through `sendCommand()` and direct runtime commands through `send()`
-- receive generated endpoint events through `onEvent()` and direct runtime events through `on()`
+- send endpoint-addressed commands through `sendCommand()`
+- receive endpoint-addressed events through `onEvent()`
 - read `myPeerId()`, `myPeerEntity()`, `peerId(peerEntity)`, `peerStatus(peerEntity)`, `ownerOf(entity)`, and `isMine(entity)`
 - request a full snapshot
 - observe applied snapshots through `onSnapshot()`
@@ -500,7 +534,8 @@ Definitions are frozen and fail fast:
 - manual ids must be integers in `[0, 4294967295]`
 - unknown initial value and RPC payload keys throw
 
-`protocol.manifest()` returns a frozen summary of component, prefab, command, and event ids. Use it for diagnostics, protocol validation, or tooling.
+`protocol.manifest()` returns a frozen summary of component, prefab, command, event, and stream ids.
+Use it for diagnostics, protocol validation, or tooling.
 
 ## `.snap` IDL
 
@@ -513,7 +548,7 @@ pnpm --dir examples/protocol/core generate
 ```
 
 Endpoint-scoped RPC is declared inside `world {}`, `peer {}`, and `entity Name {}` blocks.
-Endpoint blocks contain component references, commands, and events:
+Endpoint blocks contain component references, commands, events, and streams:
 
 ```snap
 component MatchState {
@@ -544,6 +579,7 @@ entity Player {
   health: Health
 
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }
 ```
@@ -557,7 +593,8 @@ and [examples/protocol/game.snap](examples/protocol/game.snap).
 
 ## RPC
 
-In `.snap` projects, commands and events are declared on the endpoint that can receive or emit them:
+In `.snap` projects, commands, events, and streams are declared on the endpoint that can receive or
+emit them:
 
 ```snap
 world {
@@ -572,28 +609,34 @@ peer {
 
 entity Player {
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }
 ```
 
-The generator creates a typed facade and endpoint handler stubs. Commands travel client to server;
-events travel server to clients:
+The generator creates a typed facade and endpoint handler stubs. Commands and streams travel client
+to server; events travel server to clients:
 
 ```ts
-commands.Player.Move(clientWorld, { id: 1 }, { dx: 1, dy: 0 });
+const playerEntity = entities.Player.first(clientWorld);
+if (playerEntity === undefined) throw new Error("Player is not replicated yet");
 
-events.Player.MoveDisabled.broadcast(serverWorld, { id: 1 }, { disabled: true });
+commands.Player.Move(clientWorld, playerEntity, { dx: 1, dy: 0 });
+streams.Player.MoveStream(clientWorld, playerEntity, { dx: 1, dy: 0 }, clientTick, dtMs);
+
+events.Player.MoveDisabled.broadcast(serverWorld, playerEntity, { disabled: true });
 events.Peer.Alert.sendTo(serverWorld, [peerEntity], { reason: 1 });
 events.World.GameStarted.broadcast(serverWorld, {});
 ```
 
-Generated endpoint handlers receive one frozen `CommandCtx<TPayload>` or `EventCtx<TPayload>`.
+Generated endpoint handlers receive one frozen `CommandCtx<TPayload>`, `EventCtx<TPayload>`, or
+`CommandStreamCtx<TPayload>`.
 `ctx.source` and `ctx.target` are entity refs; there is no generated `ctx.sender`. Peer ids are
 exposed from PeerEntity refs through `world.peerId(peerEntity)`. Peer connection state is replicated
 through the built-in `PeerState` component and can be read with `world.peerStatus(peerEntity)`.
 
-The lower-level `defineCommand()` / `defineEvent()` runtime API remains available for direct
-integrations that do not use `.snap` generation, such as the simple runtime examples.
+The lower-level `defineCommand()` / `defineEvent()` / `defineStream()` runtime API remains available
+for direct integrations that do not use `.snap` generation, such as the simple runtime examples.
 
 Handler errors are isolated and logged through `logger.error`. Handlers run from a stable dispatch snapshot, so handlers registered during one dispatch start on a later packet.
 
@@ -641,6 +684,7 @@ SnapScript uses channels as policy:
 - control packets and structural snapshots use `reliable`
 - update-only dirty snapshots use `unreliable`
 - commands/events use the channel declared on the RPC definition
+- streams use the unreliable channel internally
 
 There is no generic public `Transport` type and no world-level default channel option. If you need WebSocket, WebRTC, UDP, Steam networking, or an engine networking layer, implement the adapter on the server layer.
 
@@ -711,7 +755,7 @@ Framework responsibilities:
 
 - tick/time context
 - local vs remote apply paths
-- command/event encoding
+- command/event/stream encoding
 - post-apply snapshot hooks
 - future state capture/restore and reconciliation hooks
 

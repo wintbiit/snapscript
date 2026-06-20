@@ -47,5 +47,6 @@ entity Player {
   health: Health
 
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }

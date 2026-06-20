@@ -16,6 +16,7 @@ describe("snap idl", () => {
       readonly endpoints: Record<string, { readonly components: Record<string, string> }>;
       readonly commands: Record<string, { readonly id: number; readonly fields: Record<string, number> }>;
       readonly events: Record<string, { readonly id: number; readonly fields: Record<string, number> }>;
+      readonly streams: Record<string, { readonly id: number; readonly fields: Record<string, number> }>;
     };
 
     expect(checkSnap(source).syntax).toBe("v1");
@@ -25,6 +26,7 @@ describe("snap idl", () => {
     expect(protocol).toContain('defineCommand("World.StartGame"');
     expect(protocol).toContain('defineCommand("Peer.Ready"');
     expect(protocol).toContain('defineCommand("Player.Move"');
+    expect(protocol).toContain('defineStream("Player.MoveStream"');
     expect(protocol).toContain('defineEvent("Player.MoveDisabled"');
     expect(protocol).toContain('export const Peer = defineEntity("Peer", { peerState: PeerState, connectionInfo: ConnectionInfo }, { id: 0 });');
     expect(protocol).toContain("validateEndpointCtx(world, ctx");
@@ -41,8 +43,10 @@ describe("snap idl", () => {
     expect(manifest.endpoints.Peer!.components).toEqual({ connectionInfo: "ConnectionInfo" });
     expect(manifest.commands["Player.Move"]!.fields).toEqual({ dx: 0, dy: 1 });
     expect(manifest.commands["Player.Move"]!.id).toBe(5);
+    expect(manifest.streams["Player.MoveStream"]!.fields).toEqual({ dx: 0, dy: 1 });
+    expect(manifest.streams["Player.MoveStream"]!.id).toBe(6);
     expect(manifest.events["Player.MoveDisabled"]!.fields).toEqual({ disabled: 0 });
-    expect(manifest.events["Player.MoveDisabled"]!.id).toBe(6);
+    expect(manifest.events["Player.MoveDisabled"]!.id).toBe(7);
     expect(files.some((file) => file.path.endsWith("snapscript.lock.json"))).toBe(false);
   });
 

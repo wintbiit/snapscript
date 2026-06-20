@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createClient, createServer, Position, commands } from "../src/index";
+import { createClient, createServer, Position, commands, entities } from "../src/index";
 import { createMemoryTransportPair, type Clock } from "snapscript";
 
 function clock(): Clock {
@@ -23,7 +23,9 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
+    const playerEntity = entities.Player.first(client);
+    if (playerEntity === undefined) throw new Error("expected a replicated Player");
+    commands.Player.Move(client, playerEntity, { dx: 1, dy: 0 });
     server.tick();
     client.tick();
 

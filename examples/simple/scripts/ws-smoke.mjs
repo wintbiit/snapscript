@@ -3,6 +3,7 @@ import {
   angle16,
   bool,
   createClientWorld,
+  WorldEntity,
   defineCommand,
   defineEntity,
   defineEvent,
@@ -89,7 +90,7 @@ const world = createClientWorld({
   },
 });
 
-world.on(DamageEvent, (ctx) => {
+world.onEvent(DamageEvent, (ctx) => {
   console.log(JSON.stringify({ event: "DamageEvent", amount: ctx.payload.amount }));
 });
 
@@ -109,7 +110,7 @@ const interval = setInterval(() => {
     );
     if (!sentDamage) {
       sentDamage = true;
-      world.send(DamageCommand, { amount: 10 });
+      world.sendCommand(WorldEntity, DamageCommand, { amount: 10 });
     }
   }
 }, 100);

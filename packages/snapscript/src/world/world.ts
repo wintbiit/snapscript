@@ -12,16 +12,20 @@ import { isProtocolDefinition, registryForProtocol, type ProtocolDefinition } fr
 import type {
   CommandDefinition,
   CommandHandler,
+  CommandStreamHandler,
+  CommandStreamValidator,
   CommandValidator,
   EventDefinition,
   EventHandler,
   EventValidator,
   RpcDefinition,
   RpcHandler,
+  StreamDefinition,
 } from "../rpc/index";
 import {
   createSyncClient,
   createSyncServer,
+  type CommandStreamLimits,
   type SyncClient,
   type SyncServer,
   type SyncServerOptions,
@@ -360,6 +364,8 @@ export interface ServerWorldOptions {
    * when every entity should be visible to every peer.
    */
   readonly interest?: (peerId: PeerId, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
+  /** Optional command-stream resource limits. */
+  readonly streamLimits?: Partial<CommandStreamLimits>;
 }
 
 /**
@@ -377,6 +383,8 @@ export interface ClientWorldOptions {
   readonly clock: Clock;
   /** Optional structured logger used for isolated handler/runtime errors. */
   readonly logger?: Logger;
+  /** Optional command-stream resource limits. */
+  readonly streamLimits?: Partial<CommandStreamLimits>;
 }
 
 /**
@@ -1701,28 +1709,18 @@ export interface ServerWorld {
   system(name: string, phase: SystemPhase, fn: SystemFn<ServerWorld>): () => void;
   /** Advances transport input, systems, and server snapshot output once. */
   tick(): void;
-  /** Handles a client-to-server command. */
-  on<TFields extends FieldDefinitions>(
-    rpc: CommandDefinition<TFields>,
-    handler: RpcHandler<TFields>,
-  ): () => void;
   /** Handles an endpoint-addressed client-to-server command. */
   onCommand<TFields extends FieldDefinitions>(
     rpc: CommandDefinition<TFields>,
     handler: CommandHandler<TFields>,
     validator?: CommandValidator<TFields>,
   ): () => void;
-  /** Broadcasts a server-to-client event. */
-  broadcast<TFields extends FieldDefinitions>(
-    rpc: EventDefinition<TFields>,
-    payload?: Partial<FieldValues<TFields>>,
-  ): void;
-  /** Sends a server-to-client event to one peer id. */
-  sendTo<TFields extends FieldDefinitions>(
-    peerId: PeerId,
-    rpc: EventDefinition<TFields>,
-    payload?: Partial<FieldValues<TFields>>,
-  ): void;
+  /** Handles an endpoint-addressed client-to-server command stream. */
+  onCommandStream<TFields extends FieldDefinitions>(
+    stream: StreamDefinition<TFields>,
+    handler: CommandStreamHandler<TFields>,
+    validator?: CommandStreamValidator<TFields>,
+  ): () => void;
   /** Broadcasts an endpoint-addressed event to every connected peer. */
   broadcastEvent<TFields extends FieldDefinitions>(
     source: number | ReadonlyEntityRef,
@@ -1975,6 +1973,15 @@ class ServerWorldImpl implements ServerWorld {
     return this.#runtime.onCommand(rpc, handler, validator);
   }
 
+  onCommandStream<TFields extends FieldDefinitions>(
+    stream: StreamDefinition<TFields>,
+    handler: CommandStreamHandler<TFields>,
+    validator?: CommandStreamValidator<TFields>,
+  ): () => void {
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, stream, "stream", "ServerWorld.onCommandStream");
+    return this.#runtime.onCommandStream(stream, handler, validator);
+  }
+
   broadcast<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
@@ -2181,22 +2188,20 @@ export interface ClientWorld {
   system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void;
   /** Advances transport input and client systems once. */
   tick(): void;
-  /** Sends a client-to-server command. */
-  send<TFields extends FieldDefinitions>(
-    rpc: CommandDefinition<TFields>,
-    payload?: Partial<FieldValues<TFields>>,
-  ): void;
   /** Sends an endpoint-addressed client-to-server command. */
   sendCommand<TFields extends FieldDefinitions>(
     target: number | ReadonlyEntityRef,
     rpc: CommandDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
-  /** Handles a server-to-client event. */
-  on<TFields extends FieldDefinitions>(
-    rpc: EventDefinition<TFields>,
-    handler: RpcHandler<TFields>,
-  ): () => void;
+  /** Pushes one sample into a client-to-server command stream. */
+  pushCommandStream<TFields extends FieldDefinitions>(
+    target: number | ReadonlyEntityRef,
+    stream: StreamDefinition<TFields>,
+    payload: Partial<FieldValues<TFields>>,
+    clientTick: number,
+    dtMs: number,
+  ): void;
   /** Handles an endpoint-addressed server-to-client event. */
   onEvent<TFields extends FieldDefinitions>(
     rpc: EventDefinition<TFields>,
@@ -2328,6 +2333,8 @@ class ClientWorldImpl implements ClientWorld {
     this.#runTimedSystems("preUpdate", frame);
     this.#runTimedSystems("update", frame);
     this.#runTimedSystems("postUpdate", frame);
+    this.#runTimedSystems("network", frame);
+    this.#runtime.update();
   }
 
   send<TFields extends FieldDefinitions>(
@@ -2348,6 +2355,21 @@ class ClientWorldImpl implements ClientWorld {
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ClientWorld.sendCommand");
     this.#assignedPeerEntity("ClientWorld.sendCommand()");
     this.#runtime.sendCommand(targetId, rpc, payload);
+  }
+
+  pushCommandStream<TFields extends FieldDefinitions>(
+    target: number | ReadonlyEntityRef,
+    stream: StreamDefinition<TFields>,
+    payload: Partial<FieldValues<TFields>>,
+    clientTick: number,
+    dtMs: number,
+  ): void {
+    const targetId = entityIdFrom(target, "ClientWorld.pushCommandStream()");
+    assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, stream, "stream", "ClientWorld.pushCommandStream");
+    this.#assignedPeerEntity("ClientWorld.pushCommandStream()");
+    assertStreamSampleNumber(clientTick, "clientTick");
+    assertStreamSampleNumber(dtMs, "dtMs");
+    this.#runtime.pushCommandStream(targetId, stream, payload, clientTick, dtMs);
   }
 
   on<TFields extends FieldDefinitions>(
@@ -2447,6 +2469,7 @@ function serverRuntimeOptions(
     ensurePeerEntity: (peerId) => (world as ServerWorldImpl)._ensurePeerEntity(peerId).id,
     markPeerDisconnected: (peerId) => (world as ServerWorldImpl)._markPeerDisconnected(peerId),
     snapshotEncoding: options.snapshotEncoding ?? "default",
+    ...(options.streamLimits === undefined ? {} : { streamLimits: options.streamLimits }),
   };
 }
 
@@ -2464,6 +2487,7 @@ function clientRuntimeOptions(
     registry: registryFromOptions(options),
     ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
+    ...(options.streamLimits === undefined ? {} : { streamLimits: options.streamLimits }),
     onSnapshot,
     assignPeerEntity: (peerId, peerEntityId) => (world as ClientWorldImpl)._assignPeerEntity(peerId, peerEntityId),
   };
@@ -2475,7 +2499,7 @@ function registryFromOptions(options: {
   return registryForProtocol(options.protocol);
 }
 
-type ExpectedRpcKind = "command" | "event";
+type ExpectedRpcKind = "command" | "event" | "stream";
 
 function assertProtocolRpc(
   protocol: ProtocolDefinition,
@@ -2515,12 +2539,15 @@ function isRpcDefinition(value: unknown): value is RpcDefinition {
     typeof (value as { readonly name?: unknown }).name === "string" &&
     typeof (value as { readonly rpcId?: unknown }).rpcId === "number" &&
     ((value as { readonly kind?: unknown }).kind === "command" ||
-      (value as { readonly kind?: unknown }).kind === "event")
+      (value as { readonly kind?: unknown }).kind === "event" ||
+      (value as { readonly kind?: unknown }).kind === "stream")
   );
 }
 
 function rpcKindArticle(kind: ExpectedRpcKind): string {
-  return kind === "event" ? "an event" : "a command";
+  if (kind === "event") return "an event";
+  if (kind === "stream") return "a stream";
+  return "a command";
 }
 
 function assertServerWorldOptions(options: unknown): asserts options is ServerWorldOptions {
@@ -2572,6 +2599,7 @@ const serverWorldOptionKeys = new Set([
   "snapshotEncoding",
   "visibility",
   "interest",
+  "streamLimits",
 ]);
 
 const clientWorldOptionKeys = new Set([
@@ -2580,6 +2608,7 @@ const clientWorldOptionKeys = new Set([
   "clock",
   "logger",
   "onSnapshot",
+  "streamLimits",
 ]);
 
 function assertKnownOptionKeys(
@@ -2782,6 +2811,12 @@ function assertPeerRef(peer: unknown, label: string): asserts peer is PeerRef {
 function assertPeerId(peerId: unknown, label: string): asserts peerId is PeerId {
   if (typeof peerId !== "number" || !Number.isSafeInteger(peerId) || peerId < 0) {
     throw new Error(`${label} requires a non-negative integer peer id`);
+  }
+}
+
+function assertStreamSampleNumber(value: unknown, label: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error(`${label} must be an integer in [0, 4294967295]`);
   }
 }
 

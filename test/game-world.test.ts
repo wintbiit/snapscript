@@ -606,21 +606,21 @@ describe("single world sync api", () => {
     const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
 
-    expect(() => host.on(Move, () => {})).toThrow(/not registered in this world protocol/);
-    expect(() => client.send(Move, {})).toThrow(/not registered in this world protocol/);
-    expect(() => host.broadcast(UnregisteredFlash, {})).toThrow(/not registered in this world protocol/);
-    expect(() => client.on(UnregisteredFlash, () => {})).toThrow(/not registered in this world protocol/);
+    expect(() => host.onCommand(Move, () => {})).toThrow(/not registered in this world protocol/);
+    expect(() => client.sendCommand(WorldEntity, Move, {})).toThrow(/not registered in this world protocol/);
+    expect(() => host.broadcastEvent(WorldEntity, UnregisteredFlash, {})).toThrow(/not registered in this world protocol/);
+    expect(() => client.onEvent(UnregisteredFlash, () => {})).toThrow(/not registered in this world protocol/);
 
-    expect(() => host.on(Flash as never, () => {})).toThrow(/expects a command/);
-    expect(() => host.broadcast(Ping as never, {})).toThrow(/expects an event/);
-    expect(() => client.send(Flash as never, {})).toThrow(/expects a command/);
-    expect(() => client.on(Ping as never, () => {})).toThrow(/expects an event/);
-    expect(() => host.on(Ping, true as never)).toThrow(/handler must be a function/);
-    expect(() => client.on(Flash, true as never)).toThrow(/handler must be a function/);
-    expect(() => client.send(Ping)).toThrow(/before peer assignment/);
-    expect(() => host.broadcast(Flash)).not.toThrow();
-    expect(() => host.broadcast(Flash, { dx: 1 } as never)).toThrow(/unknown field "dx"/);
-    expect(() => host.broadcast(Flash, [] as never)).toThrow(/RPC payload must be an object/);
+    expect(() => host.onCommand(Flash as never, () => {})).toThrow(/expects a command/);
+    expect(() => host.broadcastEvent(WorldEntity, Ping as never, {})).toThrow(/expects an event/);
+    expect(() => client.sendCommand(WorldEntity, Flash as never, {})).toThrow(/expects a command/);
+    expect(() => client.onEvent(Ping as never, () => {})).toThrow(/expects an event/);
+    expect(() => host.onCommand(Ping, true as never)).toThrow(/handler must be a function/);
+    expect(() => client.onEvent(Flash, true as never)).toThrow(/handler must be a function/);
+    expect(() => client.sendCommand(WorldEntity, Ping)).toThrow(/before peer assignment/);
+    expect(() => host.broadcastEvent(WorldEntity, Flash)).not.toThrow();
+    expect(() => host.broadcastEvent(WorldEntity, Flash, { dx: 1 } as never)).toThrow(/unknown field "dx"/);
+    expect(() => host.broadcastEvent(WorldEntity, Flash, [] as never)).toThrow(/RPC payload must be an object/);
   });
 
   it("throws when a client sends a command before peer assignment", () => {
@@ -631,7 +631,6 @@ describe("single world sync api", () => {
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
 
     expect(() => client.myPeerEntity()).toThrow(/before peer assignment/);
-    expect(() => client.send(Ping, {})).toThrow(/before peer assignment/);
     expect(() => client.sendCommand(WorldEntity, Ping, {})).toThrow(/before peer assignment/);
   });
 
@@ -656,7 +655,7 @@ describe("single world sync api", () => {
     host.spawn(Player);
     const seen: string[] = [];
 
-    host.on(Move, (context) => {
+    host.onCommand(Move, (context) => {
       expect(Object.isFrozen(context.payload)).toBe(true);
       expect(() => {
         (context.payload as { dx: number }).dx = 1;
@@ -667,10 +666,10 @@ describe("single world sync api", () => {
       }).toThrow();
       seen.push(`host:${context.payload.dx}:${context.channel}:${context.source.id === 0 ? "no-peer" : "peer"}`);
     });
-    host.on(Move, (context) => {
+    host.onCommand(Move, (context) => {
       seen.push(`host2:${context.payload.dx}:${context.channel}:${context.source.id === 0 ? "no-peer" : "peer"}`);
     });
-    client.on(Flash, (context) => {
+    client.onEvent(Flash, (context) => {
       expect(Object.isFrozen(context.payload)).toBe(true);
       expect(() => {
         (context.payload as { amount: number }).amount = 99;
@@ -681,7 +680,7 @@ describe("single world sync api", () => {
       }).toThrow();
       seen.push(`client:${context.payload.amount}:${context.channel}`);
     });
-    client.on(Flash, (context) => {
+    client.onEvent(Flash, (context) => {
       seen.push(`client2:${context.payload.amount}:${context.channel}:${context.tick}`);
     });
     client.onSnapshot((_world, context) => {
@@ -698,8 +697,8 @@ describe("single world sync api", () => {
     client.tick();
     host.tick();
     client.tick();
-    client.send(Move, { dx: 0.25 });
-    host.broadcast(Flash, { amount: 1 });
+    client.sendCommand(WorldEntity, Move, { dx: 0.25 });
+    host.broadcastEvent(WorldEntity, Flash, { amount: 1 });
     host.tick();
     client.tick();
 
@@ -735,11 +734,11 @@ describe("single world sync api", () => {
     const player = host.spawn(Player);
     let eventAmount = 0;
 
-    host.on(Move, (ctx) => {
+    host.onCommand(Move, (ctx) => {
       host.get(player, PlayerState)!.x.value += ctx.payload.dx;
-      host.broadcast(DamageFx, { entityId: player.id, amount: 3 });
+      host.broadcastEvent(WorldEntity, DamageFx, { entityId: player.id, amount: 3 });
     });
-    client.on(DamageFx, (ctx) => {
+    client.onEvent(DamageFx, (ctx) => {
       eventAmount = ctx.payload.amount;
     });
 
@@ -748,7 +747,7 @@ describe("single world sync api", () => {
     client.tick();
     expect(client.get(player.id, PlayerState)?.hp.value).toBe(100);
 
-    client.send(Move, { dx: 0.5 });
+    client.sendCommand(WorldEntity, Move, { dx: 0.5 });
     host.tick();
     client.tick();
 

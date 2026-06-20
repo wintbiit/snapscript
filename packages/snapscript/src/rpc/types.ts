@@ -9,8 +9,8 @@ import type {
   SchemaField,
 } from "../schema/index";
 
-/** RPC direction: commands travel client-to-server, events travel server-to-client. */
-export type RpcKind = "command" | "event";
+/** RPC direction: commands/streams travel client-to-server, events travel server-to-client. */
+export type RpcKind = "command" | "event" | "stream";
 
 /** Fully defaulted payload shape for an RPC definition. */
 export type RpcPayload<TFields extends FieldDefinitions> = FieldValues<TFields>;
@@ -20,7 +20,7 @@ export interface RpcCodec<TFields extends FieldDefinitions = FieldDefinitions> {
   read(reader: BinaryReader): FieldValues<TFields>;
 }
 
-/** Frozen command or event definition created by `defineCommand()` or `defineEvent()`. */
+/** Frozen command, event, or stream definition created by `defineCommand()`, `defineEvent()`, or `defineStream()`. */
 export interface RpcDefinition<TFields extends FieldDefinitions = FieldDefinitions> {
   readonly name: string;
   readonly rpcId: number;
@@ -45,6 +45,33 @@ export type CommandDefinition<TFields extends FieldDefinitions = FieldDefinition
 /** Server-to-client RPC definition. */
 export type EventDefinition<TFields extends FieldDefinitions = FieldDefinitions> =
   RpcDefinition<TFields> & { readonly kind: "event" };
+
+/** Client-to-server stream definition. */
+export type StreamDefinition<TFields extends FieldDefinitions = FieldDefinitions> =
+  RpcDefinition<TFields> & { readonly kind: "stream"; readonly channel: "unreliable" };
+
+export interface CommandStreamSample<TPayload = unknown> {
+  readonly sequence: number;
+  readonly clientTick: number;
+  readonly dtMs: number;
+  readonly payload: Readonly<TPayload>;
+}
+
+export interface CommandStreamCtx<TPayload = unknown> {
+  readonly source: ReadonlyEntityRef;
+  readonly target: EntityRef;
+  readonly stream: StreamDefinition;
+  readonly channel: ChannelName;
+  readonly samples: readonly CommandStreamSample<TPayload>[];
+}
+
+export type CommandStreamHandler<TFields extends FieldDefinitions> = (
+  context: CommandStreamCtx<FieldValues<TFields>>,
+) => void;
+
+export type CommandStreamValidator<TFields extends FieldDefinitions> = (
+  context: CommandStreamCtx<FieldValues<TFields>>,
+) => RpcValidationFailure | undefined;
 
 /** Optional id/channel/metadata settings for command and event definitions. */
 export interface RpcOptions {

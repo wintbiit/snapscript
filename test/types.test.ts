@@ -32,6 +32,10 @@ import type { HostWorld } from "../packages/snapscript/src/index";
 // @ts-expect-error legacy host transport type was renamed to ServerTransport.
 import type { HostTransport } from "../packages/snapscript/src/index";
 import { ServerWorld as ServerWorldValue } from "../packages/snapscript/src/index";
+// @ts-expect-error generic direct runtime context is not public; use CommandCtx/EventCtx/CommandStreamCtx.
+import type { RpcCtx } from "../packages/snapscript/src/index";
+// @ts-expect-error generic direct runtime handler is not public; use CommandHandler/EventHandler.
+import type { RpcHandler } from "../packages/snapscript/src/index";
 // @ts-expect-error low-level sync runtime is internal; use createServerWorld/createClientWorld.
 import { createSyncServer } from "../packages/snapscript/src/index";
 // @ts-expect-error snapshot codec helpers are internal to the world runtime.
@@ -138,12 +142,13 @@ if (false) {
       prefabs: {},
       commands: {},
       events: {},
+      streams: {},
       // @ts-expect-error protocol must be produced by defineProtocol()
       registry: {
         getSchema: () => undefined,
         getRpc: () => undefined,
       },
-      manifest: () => ({ components: [], prefabs: [], commands: [], events: [] }),
+      manifest: () => ({ components: [], prefabs: [], commands: [], events: [], streams: [] }),
     },
     transport: serverTransport,
     clock,
@@ -212,19 +217,19 @@ if (false) {
   Command.codec;
 }
 
-host.on(Command, (context) => {
+host.onCommand(Command, (context) => {
   context.payload.amount.toFixed();
   const peer: PeerId = context.source.id;
   peer.toFixed();
 });
-host.broadcast(Event, { amount: 1 });
-host.broadcast(Event);
+host.broadcastEvent(WorldEntity, Event, { amount: 1 });
+host.broadcastEvent(WorldEntity, Event);
 if (false) {
-  host.sendTo(1, Event, { amount: 1 });
-  client.send(Command, { amount: 1 });
-  client.send(Command);
+  host.sendEventTo(WorldEntity, WorldEntity, Event, { amount: 1 });
+  client.sendCommand(WorldEntity, Command, { amount: 1 });
+  client.sendCommand(WorldEntity, Command);
 }
-client.on(Event, (context) => {
+client.onEvent(Event, (context) => {
   context.payload.amount.toFixed();
 });
 host.each([Position, Velocity], (entity, pos, vel) => {
@@ -241,7 +246,7 @@ host.system("host-system", "update", (world) => {
   const emptyEntity = world.spawn();
   world.add(entity, Velocity);
   world.add(emptyEntity, Position);
-  world.broadcast(Event, { amount: 1 });
+  world.broadcastEvent(WorldEntity, Event, { amount: 1 });
 });
 const emptyActor = host.spawn();
 host.add(emptyActor, Position).x.value = 1;
@@ -278,21 +283,21 @@ client.system("client-system", "update", (world) => {
   world.query(Position).forEach(([entity]) => {
     world.get(entity, Position);
   });
-  world.send(Command, { amount: 1 });
+  world.sendCommand(WorldEntity, Command, { amount: 1 });
 });
 
 if (false) {
   // @ts-expect-error hosts receive commands, not events
-  host.on(Event, () => {});
+  host.onCommand(Event, () => {});
   // @ts-expect-error hosts broadcast events, not commands
-  host.broadcast(Command, { amount: 1 });
+  host.broadcastEvent(WorldEntity, Command, { amount: 1 });
   // @ts-expect-error clients send commands, not events
-  client.send(Event, { amount: 1 });
+  client.sendCommand(WorldEntity, Event, { amount: 1 });
   // @ts-expect-error clients receive events, not commands
-  client.on(Command, () => {});
+  client.onEvent(Command, () => {});
   // @ts-expect-error RPC channels are constrained to transport policy names
   defineCommand("InvalidTypeChannelCommand", { amount: u16(1) }, { channel: "ordered" });
-  host.on(Command, (context) => {
+  host.onCommand(Command, (context) => {
     // @ts-expect-error RPC payloads are read-only handler inputs
     context.payload.amount = 2;
   });

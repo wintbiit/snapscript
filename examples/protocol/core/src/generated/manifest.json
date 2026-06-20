@@ -229,7 +229,7 @@
       }
     },
     "Player.MoveDisabled": {
-      "id": 6,
+      "id": 7,
       "fields": {
         "disabled": 0
       },
@@ -237,6 +237,59 @@
         "disabled": {
           "name": "bool",
           "args": []
+        }
+      }
+    }
+  },
+  "streams": {
+    "Player.MoveStream": {
+      "id": 6,
+      "fields": {
+        "dx": 0,
+        "dy": 1
+      },
+      "types": {
+        "dx": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -1
+            },
+            {
+              "name": "max",
+              "value": 1
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
+        },
+        "dy": {
+          "name": "qf32",
+          "args": [
+            {
+              "name": "min",
+              "value": -1
+            },
+            {
+              "name": "max",
+              "value": 1
+            },
+            {
+              "name": "precision",
+              "value": 0.01
+            },
+            {
+              "name": "default",
+              "value": 0
+            }
+          ]
         }
       }
     }

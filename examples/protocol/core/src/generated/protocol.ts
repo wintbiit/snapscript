@@ -1,10 +1,10 @@
-import { PeerState, bool, defineCommand, defineComponent, defineEntity, defineEvent, defineProtocol, qf32, u16, u32, u8 } from "snapscript";
+import { PeerState, bool, defineCommand, defineComponent, defineEntity, defineEvent, defineProtocol, defineStream, qf32, u16, u32, u8 } from "snapscript";
 import { WorldEntity } from "snapscript";
-import type { ClientWorld, CommandDefinition, CommandHandler, EventDefinition, EventHandler, FieldDefinitions, FieldValues, ReadonlyEntityRef, ServerWorld, ComponentSchema, PrefabDefinition } from "snapscript";
+import type { ClientWorld, CommandDefinition, CommandHandler, CommandStreamHandler, EventDefinition, EventHandler, FieldDefinitions, FieldValues, ReadonlyEntityRef, ServerWorld, StreamDefinition, ComponentSchema, PrefabDefinition } from "snapscript";
 
-type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : never;
+type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : T extends StreamDefinition<infer TFields> ? TFields : never;
 type RpcPayload<T> = FieldValues<RpcFields<T> & FieldDefinitions>;
-type EndpointValidationCtx = { readonly rpc: { readonly name: string }; readonly source?: ReadonlyEntityRef; readonly target?: ReadonlyEntityRef };
+type EndpointValidationCtx = { readonly rpc?: { readonly name: string }; readonly stream?: { readonly name: string }; readonly source?: ReadonlyEntityRef; readonly target?: ReadonlyEntityRef };
 type EndpointSpec = { readonly name: string; readonly ref: "source" | "target"; readonly entity?: PrefabDefinition | ComponentSchema; readonly world?: true };
 
 export const Vector2Fields = { x: qf32({ min: -128, max: 128, precision: 0.01, default: 0 }), y: qf32({ min: -128, max: 128, precision: 0.01, default: 0 }) } as const;
@@ -30,16 +30,19 @@ const PeerAlert = defineEvent("Peer.Alert", { reason: u8(0) }, { id: 4, fieldIds
 export type PeerAlertPayload = RpcPayload<typeof PeerAlert>;
 const PlayerMove = defineCommand("Player.Move", { dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }), dy: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }) }, { id: 5, fieldIds: {"dx":0,"dy":1}, channel: "unreliable" });
 export type PlayerMovePayload = RpcPayload<typeof PlayerMove>;
-const PlayerMoveDisabled = defineEvent("Player.MoveDisabled", { disabled: bool(false) }, { id: 6, fieldIds: {"disabled":0}, channel: "reliable" });
+const PlayerMoveStream = defineStream("Player.MoveStream", { dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }), dy: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }) }, { id: 6, fieldIds: {"dx":0,"dy":1} });
+export type PlayerMoveStreamPayload = RpcPayload<typeof PlayerMoveStream>;
+const PlayerMoveDisabled = defineEvent("Player.MoveDisabled", { disabled: bool(false) }, { id: 7, fieldIds: {"disabled":0}, channel: "reliable" });
 export type PlayerMoveDisabledPayload = RpcPayload<typeof PlayerMoveDisabled>;
 
-export const protocolHash = "2cd64e5ff5fc007fb52e14a9f1b8ae16bb02c9f0a212f3f80c5a185c02d77806";
+export const protocolHash = "89379d7bfa31cde5de07dab073cc1a1831d124fc7379d685df1479a0541363ef";
 
 export const protocol = defineProtocol({
   components: { PeerState, MatchState, ConnectionInfo, Position, Health },
   prefabs: { Peer, Player },
   commands: { WorldStartGame, PeerReady, PlayerMove },
   events: { WorldGameStarted, PeerAlert, PlayerMoveDisabled },
+  streams: { PlayerMoveStream },
   hash: protocolHash,
 });
 
@@ -56,19 +59,20 @@ function entityEndpoint(ref: "source" | "target", entity: PrefabDefinition | Com
 }
 
 function validateEndpointCtx(world: ServerWorld | ClientWorld, ctx: EndpointValidationCtx, ...specs: readonly EndpointSpec[]): { readonly reason: string; readonly details?: Record<string, unknown> } | undefined {
+  const packetName = ctx.rpc?.name ?? ctx.stream?.name ?? "unknown";
   for (const spec of specs) {
     const ref = ctx[spec.ref];
     if (ref === undefined) {
-      return { reason: "missing endpoint ref", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref } };
+      return { reason: "missing endpoint ref", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref } };
     }
     if (spec.world === true) {
       if (ref.id !== WorldEntity.id) {
-        return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+        return { reason: "endpoint entity type mismatch", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
       }
       continue;
     }
     if (spec.entity !== undefined && !world.has(ref, spec.entity)) {
-      return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+      return { reason: "endpoint entity type mismatch", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
     }
   }
   return undefined;
@@ -99,6 +103,9 @@ export const internal = {
         },
       },
     },
+    streams: {
+
+    },
   },
   Peer: {
     commands: {
@@ -124,6 +131,9 @@ export const internal = {
         },
       },
     },
+    streams: {
+
+    },
   },
   Player: {
       commands: {
@@ -146,6 +156,16 @@ export const internal = {
           },
           on(world: ClientWorld, handler: EventHandler<RpcFields<typeof PlayerMoveDisabled> & FieldDefinitions>) {
             return world.onEvent(PlayerMoveDisabled, handler, (ctx) => validateEndpointCtx(world, ctx, entityEndpoint("source", Player), peerEndpoint("target")));
+          },
+        },
+      },
+      streams: {
+        MoveStream: {
+          push(world: ClientWorld, target: ReadonlyEntityRef, payload: RpcPayload<typeof PlayerMoveStream>, clientTick: number, dtMs: number) {
+            world.pushCommandStream(target, PlayerMoveStream, payload, clientTick, dtMs);
+          },
+          on(world: ServerWorld, handler: CommandStreamHandler<RpcFields<typeof PlayerMoveStream> & FieldDefinitions>) {
+            return world.onCommandStream(PlayerMoveStream, handler, (ctx) => validateEndpointCtx(world, ctx, peerEndpoint("source"), entityEndpoint("target", Player)));
           },
         },
       },

@@ -1,8 +1,19 @@
 import { ServerPeerId, defaultLogger, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
-import { decodeRpc, encodeRpc } from "../rpc/index";
+import {
+  decodeCommandStream,
+  decodeCommandStreamAck,
+  decodeRpc,
+  encodeCommandStream,
+  encodeCommandStreamAck,
+  encodeRpc,
+} from "../rpc/index";
 import type {
+  CommandStreamCtx,
+  CommandStreamHandler,
+  CommandStreamValidator,
   CommandHandler,
+  CommandStreamSampleInput,
   CommandValidator,
   EventHandler,
   EventValidator,
@@ -10,6 +21,7 @@ import type {
   RpcDefinition,
   RpcHandler,
   RpcValidationFailure,
+  StreamDefinition,
 } from "../rpc/index";
 import type { FieldDefinitions, FieldValues } from "../schema/index";
 import {
@@ -27,6 +39,7 @@ import {
 } from "../sync/index";
 import type { SnapshotWriteOps } from "../sync/index";
 import { WorldEntity, type ClientWorld, type ServerWorld, type SnapshotContext } from "../world/index";
+import type { EntityRef } from "../world/index";
 import type { DirtyOps } from "../world/dirty-graph";
 import { worldInternals } from "../world/internals";
 
@@ -43,6 +56,7 @@ export interface SyncServerOptions {
   readonly canReusePeerSnapshots?: () => boolean;
   readonly ensurePeerEntity?: (peerId: PeerId) => number;
   readonly markPeerDisconnected?: (peerId: PeerId) => void;
+  readonly streamLimits?: Partial<CommandStreamLimits>;
 }
 
 export interface SyncClientOptions {
@@ -53,11 +67,24 @@ export interface SyncClientOptions {
   readonly protocolHash?: string;
   readonly logger?: Logger;
   readonly sendRate?: number;
+  readonly streamLimits?: Partial<CommandStreamLimits>;
   readonly onSnapshot?: (context: SnapshotContext) => void;
   readonly assignPeerEntity?: (peerId: PeerId, peerEntityId: number) => void;
 }
 
 export type SyncRuntimeOptions = SyncClientOptions;
+
+export interface CommandStreamLimits {
+  readonly maxSamplesPerPacket: number;
+  readonly maxPendingSamples: number;
+  readonly maxStreamsPerPeer: number;
+}
+
+const defaultCommandStreamLimits: CommandStreamLimits = Object.freeze({
+  maxSamplesPerPacket: 16,
+  maxPendingSamples: 64,
+  maxStreamsPerPeer: 32,
+});
 
 export interface SyncServer {
   start(): void;
@@ -101,6 +128,11 @@ export interface SyncServer {
     handler: CommandHandler<TFields>,
     validator?: CommandValidator<TFields>,
   ): () => void;
+  onCommandStream<TFields extends FieldDefinitions>(
+    stream: StreamDefinition<TFields>,
+    handler: CommandStreamHandler<TFields>,
+    validator?: CommandStreamValidator<TFields>,
+  ): () => void;
 }
 
 export interface PeerEventTarget {
@@ -110,6 +142,7 @@ export interface PeerEventTarget {
 
 export interface SyncClient {
   start(): void;
+  update(): void;
   requestFullSnapshot(): void;
   peerId(): PeerId;
   send<TFields extends FieldDefinitions>(
@@ -120,6 +153,13 @@ export interface SyncClient {
     targetId: number,
     rpc: RpcDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
+  ): void;
+  pushCommandStream<TFields extends FieldDefinitions>(
+    targetId: number,
+    stream: StreamDefinition<TFields>,
+    payload: Partial<FieldValues<TFields>>,
+    clientTick: number,
+    dtMs: number,
   ): void;
   on<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
@@ -166,8 +206,22 @@ type HandlerEntry = {
   readonly validator?: (context: RpcCtx<FieldValues<FieldDefinitions>>) => RpcValidationFailure | undefined;
 };
 
+type StreamHandlerEntry = {
+  readonly stream: StreamDefinition;
+  readonly handler: CommandStreamHandler<FieldDefinitions>;
+  readonly validator?: (context: CommandStreamCtx<FieldValues<FieldDefinitions>>) => RpcValidationFailure | undefined;
+};
+
+interface ClientCommandStreamBuffer {
+  readonly targetId: number;
+  readonly stream: StreamDefinition;
+  readonly samples: CommandStreamSampleInput[];
+  dirty: boolean;
+}
+
 class HandlerTable {
   readonly #handlers = new Map<number, HandlerEntry[]>();
+  readonly #streamHandlers = new Map<number, StreamHandlerEntry[]>();
 
   add<TFields extends FieldDefinitions>(
     rpc: RpcDefinition<TFields>,
@@ -220,6 +274,35 @@ class HandlerTable {
     return this.add(rpc, handler as unknown as RpcHandler<TFields>, validator as unknown as (context: RpcCtx<FieldValues<TFields>>) => RpcValidationFailure | undefined);
   }
 
+  addCommandStream<TFields extends FieldDefinitions>(
+    stream: StreamDefinition<TFields>,
+    handler: CommandStreamHandler<TFields>,
+    validator?: CommandStreamValidator<TFields>,
+  ): () => void {
+    if (typeof handler !== "function") {
+      throw new Error(`Command stream "${stream.name}" handler must be a function`);
+    }
+    const entry: StreamHandlerEntry = {
+      stream,
+      handler: handler as unknown as CommandStreamHandler<FieldDefinitions>,
+      ...(validator === undefined
+        ? {}
+        : {
+            validator: validator as unknown as (context: CommandStreamCtx<FieldValues<FieldDefinitions>>) => RpcValidationFailure | undefined,
+          }),
+    };
+    const handlers = this.#streamHandlers.get(stream.rpcId) ?? [];
+    handlers.push(entry);
+    this.#streamHandlers.set(stream.rpcId, handlers);
+    return () => {
+      const current = this.#streamHandlers.get(stream.rpcId);
+      if (current === undefined) return;
+      const next = current.filter((item) => item !== entry);
+      if (next.length === 0) this.#streamHandlers.delete(stream.rpcId);
+      else this.#streamHandlers.set(stream.rpcId, next);
+    };
+  }
+
   dispatch(
     rpc: RpcDefinition,
     payload: FieldValues<FieldDefinitions>,
@@ -254,14 +337,55 @@ class HandlerTable {
       }
     }
   }
+
+  dispatchCommandStream(
+    stream: StreamDefinition,
+    context: Omit<CommandStreamCtx<FieldValues<FieldDefinitions>>, "stream">,
+    logger: Logger | undefined,
+  ): void {
+    const frozenContext = Object.freeze({
+      ...context,
+      stream,
+      samples: Object.freeze(
+        context.samples.map((sample) =>
+          Object.freeze({
+            ...sample,
+            payload: Object.freeze(sample.payload),
+          }),
+        ),
+      ),
+    }) as CommandStreamCtx<FieldValues<FieldDefinitions>>;
+    for (const entry of [...(this.#streamHandlers.get(stream.rpcId) ?? [])]) {
+      try {
+        const failure = entry.validator?.(frozenContext);
+        if (failure !== undefined) {
+          logger?.warn?.("Command stream packet dropped", {
+            stream: entry.stream.name,
+            reason: failure.reason,
+            ...(failure.details === undefined ? {} : failure.details),
+          });
+          continue;
+        }
+        entry.handler(frozenContext);
+      } catch (error) {
+        logger?.error?.("Command stream handler failed", {
+          error: error instanceof Error ? error.message : String(error),
+          stream: entry.stream.name,
+        });
+      }
+    }
+  }
 }
 
 export function createSyncServer(options: SyncServerOptions): SyncServer {
   const logger = options.logger ?? defaultLogger;
+  const streamLimits = { ...defaultCommandStreamLimits, ...options.streamLimits };
   const handlers = new HandlerTable();
   const peers = new Set<PeerRef>();
   const peerIds = new PeerIds();
   const peerStates = new Map<PeerRef, PeerState>();
+  const streamSequences = new Map<string, number>();
+  const streamsByPeer = new Map<number, Set<string>>();
 
   options.transport.onPacket((peer, packetChannel, bytes) => {
     peers.add(peer);
@@ -300,6 +424,55 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
             target: { id: decoded.targetId },
           },
           logger,
+        );
+        return;
+      }
+
+      if (messageType === MessageType.CommandStream) {
+        const decoded = decodeCommandStream(bytes, options.registry);
+        const key = commandStreamKey(peerEntityId, decoded.targetId, decoded.stream.rpcId);
+        const peerStreams = streamsByPeer.get(peerEntityId) ?? new Set<string>();
+        if (!peerStreams.has(key)) {
+          if (peerStreams.size >= streamLimits.maxStreamsPerPeer) {
+            logger.warn?.("Command stream packet dropped", {
+              stream: decoded.stream.name,
+              reason: "too many active streams for peer",
+              peerEntityId,
+              maxStreamsPerPeer: streamLimits.maxStreamsPerPeer,
+            });
+            return;
+          }
+          peerStreams.add(key);
+          streamsByPeer.set(peerEntityId, peerStreams);
+        }
+        const lastProcessed = streamSequences.get(key) ?? 0;
+        const samples = decoded.samples
+          .filter((sample) => sample.sequence > lastProcessed)
+          .sort((left, right) => left.sequence - right.sequence);
+        if (samples.length === 0) {
+          options.transport.send(
+            peer,
+            "unreliable",
+            encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, lastProcessed, options.clock.tick()),
+          );
+          return;
+        }
+        const nextLastProcessed = samples.at(-1)!.sequence;
+        streamSequences.set(key, nextLastProcessed);
+        handlers.dispatchCommandStream(
+          decoded.stream,
+          {
+            channel: packetChannel,
+            source: { id: peerEntityId },
+            target: { id: decoded.targetId } as EntityRef,
+            samples,
+          },
+          logger,
+        );
+        options.transport.send(
+          peer,
+          "unreliable",
+          encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, nextLastProcessed, options.clock.tick()),
         );
         return;
       }
@@ -440,7 +613,18 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
     onCommand(rpc, handler, validator) {
       return handlers.addCommand(rpc, handler, validator);
     },
+    onCommandStream(stream, handler, validator) {
+      return handlers.addCommandStream(stream, handler, validator);
+    },
   };
+}
+
+function commandStreamKey(peerEntityId: number, targetId: number, streamId: number): string {
+  return `${peerEntityId}:${targetId}:${streamId}`;
+}
+
+function clientCommandStreamKey(targetId: number, streamId: number): string {
+  return `${targetId}:${streamId}`;
 }
 
 function trySendSharedUpdate(
@@ -561,6 +745,9 @@ function updateOpsKey(
 export function createSyncClient(options: SyncClientOptions): SyncClient {
   const logger = options.logger ?? defaultLogger;
   const handlers = new HandlerTable();
+  const streamLimits = { ...defaultCommandStreamLimits, ...options.streamLimits };
+  const streamBuffers = new Map<string, ClientCommandStreamBuffer>();
+  const streamSequences = new Map<string, number>();
   let assignedPeerId: PeerId = ServerPeerId;
   let assignedPeerEntityId = ServerPeerId;
 
@@ -599,6 +786,18 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         );
         return;
       }
+
+      if (messageType === MessageType.CommandStreamAck) {
+        const ack = decodeCommandStreamAck(bytes);
+        const key = clientCommandStreamKey(ack.targetId, ack.streamId);
+        const buffer = streamBuffers.get(key);
+        if (buffer !== undefined) {
+          const next = buffer.samples.filter((sample) => sample.sequence > ack.lastProcessedSequence);
+          if (next.length === 0) streamBuffers.delete(key);
+          else buffer.samples.splice(0, buffer.samples.length, ...next);
+        }
+        return;
+      }
     } catch (error) {
       logError(logger, "Failed to handle client packet", error);
     }
@@ -618,6 +817,19 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities(), undefined, options.protocolHash),
       );
     },
+    update() {
+      for (const buffer of streamBuffers.values()) {
+        if (!buffer.dirty || buffer.samples.length === 0) {
+          continue;
+        }
+        const samples = buffer.samples.slice(-streamLimits.maxSamplesPerPacket);
+        options.transport.send(
+          "unreliable",
+          encodeCommandStream(buffer.stream, assignedPeerEntityId, buffer.targetId, samples, options.clock.tick()),
+        );
+        buffer.dirty = false;
+      }
+    },
     peerId() {
       return assignedPeerId;
     },
@@ -627,6 +839,24 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     },
     sendCommand(targetId, rpc, payload) {
       options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), assignedPeerEntityId, targetId));
+    },
+    pushCommandStream(targetId, stream, payload, clientTick, dtMs) {
+      const key = clientCommandStreamKey(targetId, stream.rpcId);
+      const sequence = (streamSequences.get(key) ?? 0) + 1;
+      streamSequences.set(key, sequence);
+      let buffer = streamBuffers.get(key);
+      if (buffer === undefined) {
+        if (streamBuffers.size >= streamLimits.maxStreamsPerPeer) {
+          throw new Error(`Client command streams exceed maxStreamsPerPeer (${streamLimits.maxStreamsPerPeer})`);
+        }
+        buffer = { targetId, stream, samples: [], dirty: false };
+        streamBuffers.set(key, buffer);
+      }
+      buffer.samples.push({ sequence, clientTick, dtMs, payload });
+      if (buffer.samples.length > streamLimits.maxPendingSamples) {
+        buffer.samples.splice(0, buffer.samples.length - streamLimits.maxPendingSamples);
+      }
+      buffer.dirty = true;
     },
     on(rpc, handler) {
       return handlers.add(rpc, handler);

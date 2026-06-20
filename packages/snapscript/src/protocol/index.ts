@@ -1,5 +1,5 @@
 import { createRegistry } from "../registry/index";
-import type { CommandDefinition, EventDefinition } from "../rpc/index";
+import type { CommandDefinition, EventDefinition, StreamDefinition } from "../rpc/index";
 import type { RpcDefinition } from "../rpc/types";
 import type { ComponentSchema, PrefabDefinition } from "../schema/index";
 import { isPlainObjectMap } from "../utils/object";
@@ -8,6 +8,7 @@ type ComponentMap = Record<string, ComponentSchema>;
 type PrefabMap = Record<string, PrefabDefinition<any>>;
 type CommandMap = Record<string, CommandDefinition>;
 type EventMap = Record<string, EventDefinition>;
+type StreamMap = Record<string, StreamDefinition>;
 
 const protocolBrand: unique symbol = Symbol("SnapScriptProtocol");
 const protocolRegistries = new WeakMap<ProtocolDefinition, ProtocolRegistry>();
@@ -21,6 +22,7 @@ interface ProtocolRegistry {
 export interface ProtocolDefinition<
   TCommands extends CommandMap = CommandMap,
   TEvents extends EventMap = EventMap,
+  TStreams extends StreamMap = StreamMap,
   TComponents extends ComponentMap = ComponentMap,
   TPrefabs extends PrefabMap = PrefabMap,
 > {
@@ -28,6 +30,7 @@ export interface ProtocolDefinition<
   readonly prefabs: TPrefabs;
   readonly commands: TCommands;
   readonly events: TEvents;
+  readonly streams: TStreams;
   readonly hash?: string;
   readonly [protocolBrand]: true;
   manifest(): ProtocolManifest;
@@ -39,6 +42,7 @@ export interface ProtocolManifest {
   readonly prefabs: readonly ProtocolManifestEntry[];
   readonly commands: readonly ProtocolManifestEntry[];
   readonly events: readonly ProtocolManifestEntry[];
+  readonly streams: readonly ProtocolManifestEntry[];
 }
 
 /** Name/id pair emitted by `ProtocolDefinition.manifest()`. */
@@ -51,6 +55,7 @@ export interface ProtocolManifestEntry {
 export interface DefineProtocolInput<
   TCommands extends CommandMap = Record<never, never>,
   TEvents extends EventMap = Record<never, never>,
+  TStreams extends StreamMap = Record<never, never>,
   TComponents extends ComponentMap = Record<never, never>,
   TPrefabs extends PrefabMap = Record<never, never>,
 > {
@@ -58,6 +63,7 @@ export interface DefineProtocolInput<
   readonly prefabs?: TPrefabs;
   readonly commands?: TCommands;
   readonly events?: TEvents;
+  readonly streams?: TStreams;
   readonly hash?: string;
 }
 
@@ -65,16 +71,18 @@ export interface DefineProtocolInput<
 export function defineProtocol<
   TCommands extends CommandMap = Record<never, never>,
   TEvents extends EventMap = Record<never, never>,
+  TStreams extends StreamMap = Record<never, never>,
   TComponents extends ComponentMap = Record<never, never>,
   TPrefabs extends PrefabMap = Record<never, never>,
 >(
-  input: DefineProtocolInput<TCommands, TEvents, TComponents, TPrefabs>,
-): ProtocolDefinition<TCommands, TEvents, TComponents, TPrefabs> {
+  input: DefineProtocolInput<TCommands, TEvents, TStreams, TComponents, TPrefabs>,
+): ProtocolDefinition<TCommands, TEvents, TStreams, TComponents, TPrefabs> {
   const source = assertProtocolInput(input);
   const components = cloneProtocolMap<TComponents>(source.components, "components");
   const prefabs = cloneProtocolMap<TPrefabs>(source.prefabs, "prefabs");
   const commands = cloneProtocolMap<TCommands>(source.commands, "commands");
   const events = cloneProtocolMap<TEvents>(source.events, "events");
+  const streams = cloneProtocolMap<TStreams>(source.streams, "streams");
   const hash = assertProtocolHash(source.hash);
   const registry = createRegistry();
   const registeredComponents = new Map<number, ComponentSchema>();
@@ -109,11 +117,20 @@ export function defineProtocol<
     registry.registerRpc(event);
   }
 
+  for (const [key, stream] of Object.entries(streams)) {
+    assertRpcDefinition(stream, `streams.${key}`);
+    if (stream.kind !== "stream") {
+      throw new Error(`RPC "${stream.name}" is not a stream`);
+    }
+    registry.registerRpc(stream);
+  }
+
   const protocol = Object.freeze({
     components,
     prefabs,
     commands,
     events,
+    streams,
     ...(hash === undefined ? {} : { hash }),
     [protocolBrand]: true as const,
     manifest() {
@@ -131,6 +148,10 @@ export function defineProtocol<
           id: rpc.rpcId,
         })),
         events: manifestEntries(Object.values(events), (rpc) => ({
+          name: rpc.name,
+          id: rpc.rpcId,
+        })),
+        streams: manifestEntries(Object.values(streams), (rpc) => ({
           name: rpc.name,
           id: rpc.rpcId,
         })),
@@ -204,7 +225,8 @@ function assertRpcDefinition(value: unknown, label: string): asserts value is Rp
     value === null ||
     typeof value !== "object" ||
     ((value as { readonly kind?: unknown }).kind !== "command" &&
-      (value as { readonly kind?: unknown }).kind !== "event") ||
+      (value as { readonly kind?: unknown }).kind !== "event" &&
+      (value as { readonly kind?: unknown }).kind !== "stream") ||
     typeof (value as { readonly name?: unknown }).name !== "string" ||
     !Number.isSafeInteger((value as { readonly rpcId?: unknown }).rpcId) ||
     ((value as { readonly channel?: unknown }).channel !== "reliable" &&
@@ -213,7 +235,7 @@ function assertRpcDefinition(value: unknown, label: string): asserts value is Rp
     typeof (value as { readonly fields?: unknown }).fields !== "object" ||
     !Array.isArray((value as { readonly fieldList?: unknown }).fieldList)
   ) {
-    throw new Error(`defineProtocol() ${label} must be an RPC from defineCommand() or defineEvent()`);
+    throw new Error(`defineProtocol() ${label} must be an RPC from defineCommand(), defineEvent(), or defineStream()`);
   }
 }
 

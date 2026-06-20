@@ -65,6 +65,7 @@ entity Player {
   health: Health
 
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }
 `;
@@ -241,9 +242,12 @@ User-owned logic lives in:
 System files are registered in filename order. Each system file exports
 \`register(world)\`.
 
-Use generated \`commands\` on the client and \`events\` on the server:
+Use generated \`entities\` and \`commands\` on the client, and \`events\` on the server:
 
 \`\`\`ts
+const playerEntity = entities.Player.first(clientWorld);
+if (playerEntity === undefined) throw new Error("Player is not replicated yet");
+
 commands.Player.Move(clientWorld, playerEntity, { dx: 1, dy: 0 });
 events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, {
   disabled: true,
@@ -283,7 +287,9 @@ const tsconfigTemplate = `{
 const indexTemplate = `export { createClient } from "./create-client";
 export { createServer } from "./create-server";
 export { commands } from "./generated/commands";
+export { entities } from "./generated/entities";
 export { events } from "./generated/events";
+export { streams } from "./generated/streams";
 export * from "./generated/protocol";
 `;
 
@@ -440,7 +446,7 @@ export function register(world: ClientWorld): void {
 `;
 
 const exampleRoundtripTestTemplate = `import { describe, expect, it } from "vitest";
-import { createClient, createServer, Position, commands } from "../src/index";
+import { createClient, createServer, Position, commands, entities } from "../src/index";
 import { createMemoryTransportPair, type Clock } from "snapscript";
 
 function clock(): Clock {
@@ -464,7 +470,9 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    commands.Player.Move(client, { id: 1 }, { dx: 1, dy: 0 });
+    const playerEntity = entities.Player.first(client);
+    if (playerEntity === undefined) throw new Error("expected a replicated Player");
+    commands.Player.Move(client, playerEntity, { dx: 1, dy: 0 });
     server.tick();
     client.tick();
 

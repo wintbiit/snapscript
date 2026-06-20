@@ -77,10 +77,10 @@ export interface EntityItem {
 }
 
 export interface RpcItem {
-  readonly kind: "command" | "event";
+  readonly kind: "command" | "event" | "stream";
   readonly name: string;
   readonly args: readonly FieldItem[];
-  readonly channel: Channel;
+  readonly channel?: Channel;
 }
 
 export interface TypeExpr {
@@ -100,6 +100,7 @@ export interface Manifest {
   readonly entities?: Record<string, LockedDef>;
   readonly commands?: Record<string, LockedDef>;
   readonly events?: Record<string, LockedDef>;
+  readonly streams?: Record<string, LockedDef>;
 }
 
 export interface LockedDef {
@@ -120,7 +121,7 @@ export interface GenerateOptions {
 }
 
 export interface SnapRpcModel {
-  readonly kind: "command" | "event";
+  readonly kind: "command" | "event" | "stream";
   readonly endpointName: string;
   readonly rpcName: string;
   readonly runtimeName: string;
@@ -129,11 +130,17 @@ export interface SnapRpcModel {
   readonly handlerPath: readonly string[];
 }
 
+export interface SnapEntityModel {
+  readonly name: string;
+}
+
 export interface SnapModel {
   readonly ast: SnapAst;
   readonly manifest: Required<Manifest>;
+  readonly entities: readonly SnapEntityModel[];
   readonly commands: readonly SnapRpcModel[];
   readonly events: readonly SnapRpcModel[];
+  readonly streams: readonly SnapRpcModel[];
 }
 
 const grammar = String.raw`
@@ -159,6 +166,9 @@ FieldItem = name:Ident _ ":" _ type:TypeExpr _ { return node("field", { name, ty
 EntityItem = name:Ident _ ":" _ component:Ident _ { return { kind: "component", name, component }; }
 RpcItem = kind:("command" / "event") __ name:Ident _ "(" _ args:ArgList? _ ")" _ channel:("reliable" / "unreliable") _ {
   return { kind, name, args: args ?? [], channel };
+}
+ / "stream" __ name:Ident _ "(" _ args:ArgList? _ ")" _ {
+  return { kind: "stream", name, args: args ?? [] };
 }
 ArgList = head:FieldItem tail:(_ "," _ FieldItem)* { return [head, ...tail.map((item) => item[3])]; }
 TypeExpr = name:Ident _ "(" _ args:CallArgs? _ ")" { return { name, args: args ?? [] }; } / name:Ident { return { name, args: [] }; }
@@ -200,6 +210,10 @@ function modelFromContext(
 ): SnapModel {
   const commands: SnapRpcModel[] = [];
   const events: SnapRpcModel[] = [];
+  const streams: SnapRpcModel[] = [];
+  const entities = endpointsInOrder(context)
+    .filter((endpoint) => endpoint.name !== "World" && endpoint.components.length > 0)
+    .map((endpoint) => ({ name: endpoint.name }));
   for (const endpoint of endpointsInOrder(context)) {
     for (const rpc of endpoint.rpcs) {
       const model = {
@@ -212,10 +226,11 @@ function modelFromContext(
         handlerPath: handlerPathFor(endpoint, rpc),
       } as const;
       if (rpc.kind === "command") commands.push(model);
-      else events.push(model);
+      else if (rpc.kind === "event") events.push(model);
+      else streams.push(model);
     }
   }
-  return { ast, manifest, commands, events };
+  return { ast, manifest, entities, commands, events, streams };
 }
 
 export function generateSnap(source: string, options: GenerateOptions): readonly GeneratedFile[] {
@@ -384,9 +399,10 @@ function endpointsInOrder(context: ReturnType<typeof buildContext>): readonly (E
 }
 
 function handlerPathFor(endpoint: EndpointDecl | EntityDecl, rpc: RpcItem): readonly string[] {
+  const side = rpc.kind === "event" ? "client" : "server";
   return endpoint.kind === "endpoint"
-    ? ["logic", rpc.kind === "command" ? "server" : "client", `${endpoint.name}.ts`]
-    : ["logic", rpc.kind === "command" ? "server" : "client", `${endpoint.name}.ts`];
+    ? ["logic", side, `${endpoint.name}.ts`]
+    : ["logic", side, `${endpoint.name}.ts`];
 }
 
 function expandComponentBody(
@@ -457,6 +473,7 @@ function buildManifest(ast: SnapAst): Required<Manifest> {
     entities: {},
     commands: {},
     events: {},
+    streams: {},
   };
   const context = buildContext(ast);
   for (const item of context.enums.values()) {
@@ -485,7 +502,7 @@ function buildManifest(ast: SnapAst): Required<Manifest> {
   for (const endpoint of endpointsInOrder(context)) {
     for (const rpc of endpoint.rpcs) {
       const name = `${endpoint.name}.${rpc.name}`;
-      const target = rpc.kind === "command" ? manifest.commands : manifest.events;
+      const target = rpc.kind === "command" ? manifest.commands : rpc.kind === "event" ? manifest.events : manifest.streams;
       target[name] = {
         id: rpcId,
         fields: fieldIdsFor(expandRpcFields(rpc, context.structs, context.enums)),
@@ -525,7 +542,7 @@ function normalizeType(type: TypeExpr): unknown {
 }
 
 function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Required<Manifest>): string {
-  const helpers = new Set<string>(["defineComponent", "defineEntity", "defineCommand", "defineEvent", "defineProtocol"]);
+  const helpers = new Set<string>(["defineComponent", "defineEntity", "defineCommand", "defineEvent", "defineProtocol", "defineStream"]);
   for (const struct of context.structs.values()) {
     for (const field of expandComponentBody(struct.body, context.structs, context.enums, [struct.name])) {
       collectHelpers(helpers, field.type, context.enums);
@@ -550,11 +567,11 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
   const lines: string[] = [
     `import { ${runtimeImports.join(", ")} } from "snapscript";`,
     `import { WorldEntity } from "snapscript";`,
-    `import type { ClientWorld, CommandDefinition, CommandHandler, EventDefinition, EventHandler, FieldDefinitions, FieldValues, ReadonlyEntityRef, ServerWorld, ComponentSchema, PrefabDefinition } from "snapscript";`,
+    `import type { ClientWorld, CommandDefinition, CommandHandler, CommandStreamHandler, EventDefinition, EventHandler, FieldDefinitions, FieldValues, ReadonlyEntityRef, ServerWorld, StreamDefinition, ComponentSchema, PrefabDefinition } from "snapscript";`,
     "",
-    `type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : never;`,
+    `type RpcFields<T> = T extends CommandDefinition<infer TFields> ? TFields : T extends EventDefinition<infer TFields> ? TFields : T extends StreamDefinition<infer TFields> ? TFields : never;`,
     `type RpcPayload<T> = FieldValues<RpcFields<T> & FieldDefinitions>;`,
-    `type EndpointValidationCtx = { readonly rpc: { readonly name: string }; readonly source?: ReadonlyEntityRef; readonly target?: ReadonlyEntityRef };`,
+    `type EndpointValidationCtx = { readonly rpc?: { readonly name: string }; readonly stream?: { readonly name: string }; readonly source?: ReadonlyEntityRef; readonly target?: ReadonlyEntityRef };`,
     `type EndpointSpec = { readonly name: string; readonly ref: "source" | "target"; readonly entity?: PrefabDefinition | ComponentSchema; readonly world?: true };`,
     "",
   ];
@@ -584,16 +601,20 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
   if (context.entities.size > 0) lines.push("");
   const commandNames: string[] = [];
   const eventNames: string[] = [];
+  const streamNames: string[] = [];
   const rpcs: { readonly model: SnapRpcModel; readonly rpc: RpcItem }[] = [];
   for (const endpoint of endpointsInOrder(context)) {
     for (const rpc of endpoint.rpcs) {
       const runtimeName = `${endpoint.name}.${rpc.name}`;
       const exportName = `${endpoint.name}${rpc.name}`;
-      const manifestMap = rpc.kind === "command" ? manifest.commands : manifest.events;
-      const factory = rpc.kind === "command" ? "defineCommand" : "defineEvent";
-      const collection = rpc.kind === "command" ? commandNames : eventNames;
+      const manifestMap = rpc.kind === "command" ? manifest.commands : rpc.kind === "event" ? manifest.events : manifest.streams;
+      const factory = rpc.kind === "command" ? "defineCommand" : rpc.kind === "event" ? "defineEvent" : "defineStream";
+      const collection = rpc.kind === "command" ? commandNames : rpc.kind === "event" ? eventNames : streamNames;
       collection.push(exportName);
-      lines.push(`const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs, context.enums), context.enums)}, { id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} });`);
+      const options = rpc.kind === "stream"
+        ? `{ id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)} }`
+        : `{ id: ${manifestMap[runtimeName]!.id}, fieldIds: ${JSON.stringify(manifestMap[runtimeName]!.fields)}, channel: ${JSON.stringify(rpc.channel)} }`;
+      lines.push(`const ${exportName} = ${factory}(${JSON.stringify(runtimeName)}, ${emitFields(expandRpcFields(rpc, context.structs, context.enums), context.enums)}, ${options});`);
       lines.push(`export type ${exportName}Payload = RpcPayload<typeof ${exportName}>;`);
       rpcs.push({
         model: {
@@ -609,7 +630,7 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
       });
     }
   }
-  if (commandNames.length + eventNames.length > 0) lines.push("");
+  if (commandNames.length + eventNames.length + streamNames.length > 0) lines.push("");
   lines.push(`export const protocolHash = ${JSON.stringify(protocolHash)};`);
   lines.push("");
   lines.push(`export const protocol = defineProtocol({`);
@@ -617,6 +638,7 @@ function emitProtocol(context: ReturnType<typeof buildContext>, manifest: Requir
   lines.push(`  prefabs: { ${[...(needsPeerEntity ? ["Peer"] : []), ...context.entities.keys()].join(", ")} },`);
   lines.push(`  commands: { ${commandNames.join(", ")} },`);
   lines.push(`  events: { ${eventNames.join(", ")} },`);
+  lines.push(`  streams: { ${streamNames.join(", ")} },`);
   lines.push(`  hash: protocolHash,`);
   lines.push(`});`);
   lines.push("");
@@ -780,6 +802,9 @@ ${endpointRpcs.filter((rpc) => rpc.kind === "command").map((rpc) => endpointComm
     events: {
 ${endpointRpcs.filter((rpc) => rpc.kind === "event").map((rpc) => endpointEventBinding(property, rpc)).join("\n")}
     },
+    streams: {
+${endpointRpcs.filter((rpc) => rpc.kind === "stream").map((rpc) => endpointStreamBinding(property, rpc)).join("\n")}
+    },
   },`;
 }
 
@@ -834,6 +859,9 @@ ${entityRpcs.filter((rpc) => rpc.kind === "command").map(entityCommandBinding).j
       events: {
 ${entityRpcs.filter((rpc) => rpc.kind === "event").map(entityEventBinding).join("\n")}
       },
+      streams: {
+${entityRpcs.filter((rpc) => rpc.kind === "stream").map(entityStreamBinding).join("\n")}
+      },
   },`;
 }
 
@@ -862,6 +890,30 @@ function entityEventBinding(rpc: SnapRpcModel): string {
         },`;
 }
 
+function endpointStreamBinding(property: "world" | "peer", rpc: SnapRpcModel): string {
+  const target = property === "world" ? "WorldEntity" : "world.myPeerEntity()";
+  const targetSpec = property === "world" ? `worldEndpoint("target")` : `peerEndpoint("target")`;
+  return `      ${rpc.rpcName}: {
+        push(world: ClientWorld, payload: RpcPayload<typeof ${rpc.exportName}>, clientTick: number, dtMs: number) {
+          world.pushCommandStream(${target}, ${rpc.exportName}, payload, clientTick, dtMs);
+        },
+        on(world: ServerWorld, handler: CommandStreamHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+          return world.onCommandStream(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, peerEndpoint("source"), ${targetSpec}));
+        },
+      },`;
+}
+
+function entityStreamBinding(rpc: SnapRpcModel): string {
+  return `        ${rpc.rpcName}: {
+          push(world: ClientWorld, target: ReadonlyEntityRef, payload: RpcPayload<typeof ${rpc.exportName}>, clientTick: number, dtMs: number) {
+            world.pushCommandStream(target, ${rpc.exportName}, payload, clientTick, dtMs);
+          },
+          on(world: ServerWorld, handler: CommandStreamHandler<RpcFields<typeof ${rpc.exportName}> & FieldDefinitions>) {
+            return world.onCommandStream(${rpc.exportName}, handler, (ctx) => validateEndpointCtx(world, ctx, peerEndpoint("source"), entityEndpoint("target", ${rpc.endpointName})));
+          },
+        },`;
+}
+
 function emitEndpointValidationHelpers(): string {
   return `function worldEndpoint(ref: "source" | "target"): EndpointSpec {
   return { name: "World", ref, world: true };
@@ -876,19 +928,20 @@ function entityEndpoint(ref: "source" | "target", entity: PrefabDefinition | Com
 }
 
 function validateEndpointCtx(world: ServerWorld | ClientWorld, ctx: EndpointValidationCtx, ...specs: readonly EndpointSpec[]): { readonly reason: string; readonly details?: Record<string, unknown> } | undefined {
+  const packetName = ctx.rpc?.name ?? ctx.stream?.name ?? "unknown";
   for (const spec of specs) {
     const ref = ctx[spec.ref];
     if (ref === undefined) {
-      return { reason: "missing endpoint ref", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref } };
+      return { reason: "missing endpoint ref", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref } };
     }
     if (spec.world === true) {
       if (ref.id !== WorldEntity.id) {
-        return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+        return { reason: "endpoint entity type mismatch", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
       }
       continue;
     }
     if (spec.entity !== undefined && !world.has(ref, spec.entity)) {
-      return { reason: "endpoint entity type mismatch", details: { rpc: ctx.rpc.name, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
+      return { reason: "endpoint entity type mismatch", details: { rpc: packetName, endpoint: spec.name, ref: spec.ref, entityId: ref.id } };
     }
   }
   return undefined;

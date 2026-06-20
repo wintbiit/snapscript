@@ -3,6 +3,7 @@ import {
   bool,
   createClientWorld,
   createServerWorld,
+  WorldEntity,
   defineCommand,
   defineEntity,
   defineEvent,
@@ -230,7 +231,7 @@ export class ServerPeer {
   #lastEvent: string | undefined;
 
   constructor() {
-    this.world.on(MoveCommand, (ctx) => {
+    this.world.onCommand(MoveCommand, (ctx) => {
       // Command handlers mutate server-side NetRefs; dirty snapshots are produced during world.tick().
       const payload = ctx.payload;
       const player = this.playerState();
@@ -238,22 +239,22 @@ export class ServerPeer {
       player.y.value += payload.dy;
     });
 
-    this.world.on(DamageCommand, (ctx) => {
+    this.world.onCommand(DamageCommand, (ctx) => {
       const payload = ctx.payload;
       const player = this.playerState();
       player.hp.value = Math.max(0, player.hp.value - payload.amount);
       player.dead.value = player.hp.value <= 0;
-      this.world.broadcast(DamageEvent, { entityId: this.player.id, amount: payload.amount });
+      this.world.broadcastEvent(WorldEntity, DamageEvent, { entityId: this.player.id, amount: payload.amount });
     });
 
-    this.world.on(HealCommand, (ctx) => {
+    this.world.onCommand(HealCommand, (ctx) => {
       const payload = ctx.payload;
       const player = this.playerState();
       player.hp.value = Math.min(100, player.hp.value + payload.amount);
       player.dead.value = false;
     });
 
-    this.world.on(RotateCommand, (ctx) => {
+    this.world.onCommand(RotateCommand, (ctx) => {
       const payload = ctx.payload;
       const player = this.playerState();
       player.yaw.value = (player.yaw.value + payload.delta + 360) % 360;
@@ -304,7 +305,7 @@ export class ClientPeer {
   #lastEvent: string | undefined;
 
   constructor() {
-    this.world.on(DamageEvent, (ctx) => {
+    this.world.onEvent(DamageEvent, (ctx) => {
       const payload = ctx.payload;
       // Events are for client effects and UI bookkeeping; replicated state still comes from snapshots.
       this.#lastEvent = `damage ${payload.amount} on #${payload.entityId}`;
@@ -320,19 +321,19 @@ export class ClientPeer {
   }
 
   damage(): void {
-    this.world.send(DamageCommand, { amount: 10 });
+    this.world.sendCommand(WorldEntity, DamageCommand, { amount: 10 });
   }
 
   heal(): void {
-    this.world.send(HealCommand, { amount: 10 });
+    this.world.sendCommand(WorldEntity, HealCommand, { amount: 10 });
   }
 
   move(dx: number, dy: number): void {
-    this.world.send(MoveCommand, { dx, dy });
+    this.world.sendCommand(WorldEntity, MoveCommand, { dx, dy });
   }
 
   rotate(delta: number): void {
-    this.world.send(RotateCommand, { delta });
+    this.world.sendCommand(WorldEntity, RotateCommand, { delta });
   }
 
   requestFull(): void {

@@ -1,126 +1,86 @@
 # Protocol IDL Direction
 
-Last reviewed: 2026-06-05
+Last reviewed: 2026-06-20
 
 ## Purpose
 
-SnapScript should grow a declaration-first protocol workflow, similar in spirit to framework IDL
-tooling such as go-zero, while keeping the current runtime small and portable.
-
-The intended workflow is:
+SnapScript uses `.snap` files as the declaration-first protocol workflow:
 
 ```txt
 schema.snap
   -> snapscript check
   -> snapscript generate
-  -> generated TypeScript protocol, RPC bindings, manifest, and optional stubs
+  -> generated TypeScript protocol, RPC bindings, manifest, and user logic stubs
 ```
 
-The generated TypeScript should call the runtime definition APIs, but the public protocol model is
-IDL-first. The vNext RPC design is a breaking redesign around endpoint-scoped declarations; it does
+The generated TypeScript calls the runtime definition APIs, but the public protocol model is
+IDL-first. The current RPC model is a breaking redesign around endpoint-scoped declarations and does
 not preserve the previous service-scoped RPC API.
 
 ## Goals
 
 - Make protocol definitions a single source of truth.
-- Reduce repetitive handwritten protocol/RPC binding code.
-- Generate portable TypeScript that can run in puerts, Node.js, browsers, and other JS runtimes.
+- Reduce repetitive handwritten protocol and RPC binding code.
+- Generate portable TypeScript that can run in Node.js, browsers, Puerts, and other JavaScript runtimes.
 - Keep server/client world construction unchanged: `createServerWorld()` and `createClientWorld()`.
-- Keep transports outside the protocol IDL. The server/engine layer still owns reliability and connection
-  lifecycle.
-- Generate deterministic component, RPC, and field ids from declaration order.
+- Keep transports outside the protocol IDL.
+- Generate deterministic component, entity, RPC, and field ids from declaration order.
 - Fail early during check/generate when schema definitions are inconsistent.
-- Keep replicated component snapshots on SnapScript's codec because it owns quantization, field
-  masks, dirty tracking, and batched update semantics.
+- Keep replicated component snapshots on SnapScript's codec.
 
 ## Non-Goals
 
 - No Room/Game/App abstraction.
 - No runtime schema migration or protocol compatibility negotiation in this phase.
 - No replacement of the snapshot wire format with protobuf, FlatBuffers, or another generic codec.
-- No mandatory code generation for users who prefer the handwritten API.
+- No mandatory code generation for users who prefer the handwritten runtime API.
 - No transport generation.
-- No direct dependency on decorators, reflection metadata, `eval`, dynamic import, or runtime parser
-  features that make puerts portability harder.
+- No dependency on decorators, reflection metadata, `eval`, dynamic import, or runtime parser features.
 
 ## Deterministic IDs
 
-Protocol versioning and compatibility policy are intentionally deferred. The first requirement is
-deterministic ids that are obvious from the `.snap` file.
+Protocol versioning and compatibility policy are intentionally small for now. The first requirement
+is deterministic ids that are obvious from the `.snap` file.
 
 Rules:
 
-- Component and entity declaration order is the generated id source.
-- Commands and events share one RPC id namespace, assigned by endpoint declaration order and then
-  RPC declaration order inside `world {}`, `peer {}`, and `entity {}` blocks.
-- Field order inside a component, command, or event is the field id source.
+- Component declaration order is the generated component id source.
+- Gameplay entity declaration order is the generated gameplay entity id source.
+- `world {}` and `peer {}` have reserved runtime entity semantics.
+- Commands, events, and streams share one RPC id namespace, assigned by endpoint declaration order
+  and then RPC declaration order inside `world {}`, `peer {}`, and `entity {}` blocks.
+- Field order inside a component, command, event, or stream is the field id source.
 - New fields should be appended.
 - Reordering fields or declarations is a breaking protocol change.
 - Deleting fields is a breaking protocol change.
 - The generated project should not maintain a separate `snapscript.lock.json`.
 
 Server/client protocol mismatches should be discovered before gameplay runs, preferably by generated
-manifest checks in build, CI, or startup bootstrap. The runtime protocol layer should not grow a
-large compatibility system before the IDL workflow exists.
+manifest checks in build, CI, or startup bootstrap.
 
 ## Parser Strategy
 
-We should own a `.snap` DSL instead of making `.proto` or `.fbs` the primary format.
+SnapScript owns a `.snap` DSL instead of using `.proto` or `.fbs` as the primary format.
 
 Reasons:
 
 - SnapScript has first-class concepts that generic message IDLs do not: `component`, `entity`,
-  `command`, `event`, quantized fields, dirty field masks, and server/client RPC direction.
+  `command`, `event`, `stream`, quantized fields, dirty field masks, and RPC direction.
 - Protobuf field numbers are useful, but protobuf messages do not naturally express replicated ECS
   snapshot semantics.
-- FlatBuffers is optimized for a different object/table model and would add a heavier external
-  toolchain.
+- FlatBuffers is optimized for a different object/table model and would add a heavier external toolchain.
 - A custom DSL can generate current SnapScript runtime calls without implying that the wire format is
   protobuf or FlatBuffers.
 
-We avoid a handwritten parser. The current implementation uses Peggy for the v1 single-file grammar.
-Chevrotain remains a later option if the language grows editor tooling, imports, or richer recovery.
-
-### Peggy
-
-Peggy is a PEG parser generator. It is a good fit if the first `.snap` grammar stays compact.
-
-Pros:
-
-- Small grammar files are easy to read.
-- Fast to prototype.
-- Good enough for single-file IDL in phase one.
-- Generated parser can produce a clean AST without much infrastructure.
-
-Risks:
-
-- Error recovery and rich diagnostics require extra work.
-- Large grammars can become harder to maintain.
-- IDE-like features are not the default shape.
-
-### Chevrotain
-
-Chevrotain is a parser toolkit written for JavaScript/TypeScript. It is a better fit if `.snap`
-quickly needs rich diagnostics, editor tooling, or multi-file imports.
-
-Pros:
-
-- Stronger control over lexer/parser structure.
-- Better path toward custom diagnostics and tooling.
-- Easier to evolve into language-server-style features.
-
-Risks:
-
-- More boilerplate than Peggy.
-- Slower to get the first compact grammar working.
-- The parser implementation can feel heavier than the DSL itself in phase one.
+The current implementation uses Peggy for the v1 single-file grammar. Chevrotain remains a later
+option if the language needs richer diagnostics, editor tooling, or multi-file import recovery.
 
 The parser/compiler is a development tool dependency. Generated protocol files do not depend on
 Peggy; they import only the SnapScript runtime API.
 
-## vNext Language Surface
+## Language Surface
 
-The vNext syntax is represented by `examples/protocol/game.snap`:
+The current syntax is represented by `examples/protocol/game.snap`:
 
 ```snap
 syntax = "v1"
@@ -153,6 +113,11 @@ struct Vector2 {
   y: qf32(min: -128, max: 128, precision: 0.01, default: 0)
 }
 
+struct MoveInput {
+  dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)
+  dy: qf32(min: -1, max: 1, precision: 0.01, default: 0)
+}
+
 component Position {
   Vector2
   hidden: bool(default: false)
@@ -167,6 +132,7 @@ entity Player {
   health: Health
 
   command Move(input: MoveInput) unreliable
+  stream MoveStream(input: MoveInput)
   event MoveDisabled(disabled: bool) reliable
 }
 ```
@@ -175,36 +141,35 @@ RPC is declared inside endpoints:
 
 - `world {}` maps to the reserved `WorldEntity`.
 - `peer {}` maps to replicated framework-created `PeerEntity` instances. Generated protocols include
-  a `Peer` prefab with the built-in replicated `PeerState` component plus any components declared in
+  a `Peer` prefab with the built-in replicated `PeerState` component plus components declared in
   `peer {}`.
 - `entity Name {}` maps to gameplay entities.
 
-Endpoint blocks contain component references, commands, and events. They do not declare inline
-fields or implicitly generate endpoint components.
+Endpoint blocks contain component references, commands, events, and streams. They do not declare
+inline fields or implicitly generate endpoint components.
 
-World commands are valid and target `WorldEntity`. Peer commands target the sending PeerEntity.
+World commands target `WorldEntity`. Peer commands target the sending PeerEntity. Entity commands
+target a specific gameplay entity ref.
 
 The old external `service {}` block is removed. Runtime RPC names use the endpoint prefix, for
 example `Player.Move`, `Peer.Ready`, and `World.GameStarted`.
 
-The first generated output should include:
+The generated project output includes `protocol.ts`, `manifest.json`, facade files, registries, and
+create-only user stubs.
 
-- `protocol.ts`
-- typed component/entity exports
-- a generated `Peer` prefab when RPC/peer endpoint support needs PeerEntity routing
-- endpoint-scoped RPC binding helpers
-- payload/context types for generated handlers
-- `manifest.json`
+## Generated Facade
 
-## RPC Bindings
-
-The IDL should reduce repeated command/event wiring while keeping execution world-authoritative.
-Handlers receive either `CommandCtx<TPayload>` or `EventCtx<TPayload>`. Payload fields are not
-expanded into handler arguments; decoded data stays on `ctx.payload`.
-
-The generated project exposes short command/event helpers:
+The generated facade is the primary project API:
 
 ```ts
+import { commands } from "./generated/commands";
+import { entities } from "./generated/entities";
+import { events } from "./generated/events";
+import { streams } from "./generated/streams";
+
+const playerEntity = entities.Player.first(clientWorld);
+if (playerEntity === undefined) throw new Error("Player is not replicated yet");
+
 commands.Player.Move(clientWorld, playerEntity, {
   dx: 1,
   dy: 0,
@@ -214,24 +179,86 @@ events.Player.MoveDisabled.broadcast(serverWorld, playerEntity, { disabled: true
 events.Player.MoveDisabled.sendTo(serverWorld, [peerEntity], playerEntity, {
   disabled: true,
 });
+
+streams.Player.MoveStream(clientWorld, playerEntity, {
+  dx: 1,
+  dy: 0,
+}, clientTick, dtMs);
 ```
 
-Event helpers must provide both `broadcast()` and `sendTo()`. `sendTo()` accepts one PeerEntity or an
-array of PeerEntity refs. `broadcast()` means all connected peers.
+The generated `internal` object is a mechanical bridge used by facade files and registries. User
+application code should use `commands`, `events`, `streams`, and `entities` instead of `internal`.
 
-The generated facade should not export standalone raw RPC definitions such as `PlayerMove`; command
-and event usage goes through the endpoint facade.
+### Entity Helpers
 
-Entity type validation failures are logged through `logger.warn` and dropped before user handlers
-run. Validation uses the endpoint entity declaration's component set, for example
-`world.has(target, Player)`. Missing source/target entities are also logged and dropped. Gameplay
-authorization is not implicit; user handlers validate ownership, possession, cooldowns, target
-visibility, and other project rules.
+Entity helpers expose `all()`, `mine()`, `first()`, `firstMine()`, `has()`, and `get()` for each
+component-backed endpoint entity. Use these helpers to obtain entity refs from replicated client
+state instead of constructing raw `{ id }` objects by hand.
 
-See [docs/rpc-entity-model.md](rpc-entity-model.md) for the full decision record.
+### Command Helpers
 
-## Open Questions
+Command helpers send client-to-server intent:
 
-- Whether explicit ids should ever be supported as an advanced source-level escape hatch.
-- Whether entities should support aliases only, or direct component shorthand too.
-- Whether `.proto` import should be supported later for RPC payloads only.
+- `commands.World.*(clientWorld, payload)` targets `WorldEntity`.
+- `commands.Peer.*(clientWorld, payload)` targets the sending PeerEntity.
+- `commands.<Entity>.*(clientWorld, entity, payload)` targets a specific gameplay entity.
+
+Generated server handlers receive `CommandCtx<TPayload>`. The command `source` is the sending
+PeerEntity and the `target` is the endpoint target.
+
+### Event Helpers
+
+Event helpers send server-to-client notifications:
+
+- `events.World.*.broadcast(serverWorld, payload)` sends to all connected peers.
+- `events.World.*.sendTo(serverWorld, peerEntityOrArray, payload)` sends explicitly to PeerEntity refs.
+- `events.Peer.*.broadcast(serverWorld, payload)` sends one event per visible/interested PeerEntity,
+  using each receiving PeerEntity as source and target.
+- `events.Peer.*.sendTo(serverWorld, peerEntityOrArray, payload)` sends explicitly to PeerEntity refs.
+- `events.<Entity>.*.broadcast(serverWorld, sourceEntity, payload)` sends only to peers that can
+  currently see the source entity.
+- `events.<Entity>.*.sendTo(serverWorld, peerEntityOrArray, sourceEntity, payload)` sends explicitly
+  and bypasses visibility filtering.
+
+Generated client handlers receive `EventCtx<TPayload>`. Event `target` is always the receiving
+PeerEntity.
+
+### Stream Helpers
+
+Command streams are client-to-server only and use the unreliable channel internally:
+
+```ts
+streams.Player.MoveStream(clientWorld, playerEntity, payload, clientTick, dtMs);
+```
+
+The facade call queues a sample. `ClientWorld.tick()` runs the `network` phase and then flushes dirty
+stream queues, so multiple samples pushed in one frame can be batched into one command-stream packet.
+
+Generated server handlers receive `CommandStreamCtx<TPayload>` with ordered samples. Streams use
+`MessageType.CommandStream`, minimal ack packets, per-stream sequence tracking, and client
+pending-sample limits.
+
+## Validation
+
+The runtime/generator validates mechanical invariants before calling user handlers:
+
+- command source is resolved from the transport connection and canonical PeerEntity.
+- command target exists.
+- event source exists.
+- stream target exists.
+- source/target entity type matches the endpoint that declared the RPC.
+- payload decodes successfully.
+- RPC direction matches command/event/stream usage.
+
+Entity type validation failures are logged through `logger.warn` and dropped before user handlers run.
+Gameplay authorization is not implicit; user handlers validate ownership, possession, cooldowns,
+target visibility, and other project rules.
+
+## Current Constraints
+
+- The generated facade does not expose an explicit id escape hatch; public calls use entity refs and
+  payload objects.
+- The runtime still exposes low-level world methods for direct integrations, tests, and examples.
+- Rust and C# code generation do not exist in the current repo.
+- Stream correction/replay/prediction is not implemented; current streams provide batching, sequence
+  filtering, pending limits, and minimal acknowledgements.

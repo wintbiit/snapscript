@@ -1,6 +1,6 @@
 # Entity-Scoped RPC Model
 
-Last reviewed: 2026-06-05
+Last reviewed: 2026-06-20
 
 This document records the vNext RPC design direction for SnapScript. It is a breaking redesign.
 Compatibility with the previous service-scoped RPC API is not a goal.
@@ -13,10 +13,11 @@ SnapScript RPC is declared on protocol endpoints:
 - `peer {}` declares per-peer endpoint components and peer RPC endpoints.
 - `entity Name {}` declares gameplay entity components and gameplay RPC endpoints.
 
-Commands and events are still directional:
+Commands, events, and streams are still directional:
 
 - `command` is client-originated and server-received.
 - `event` is server-originated and client-received.
+- `stream` is client-originated, server-received, unreliable, and sample-batched.
 
 Execution remains world-authoritative. RPC declarations are scoped to endpoints, but user logic is
 still plain functions called by generated world registries. SnapScript does not introduce service
@@ -71,8 +72,8 @@ entity Player {
 ```
 
 RPC is not declared in an external `service {}` block. Endpoint blocks contain only component
-references, commands, and events. They do not implicitly generate endpoint components from inline
-fields.
+references, commands, events, and streams. They do not implicitly generate endpoint components from
+inline fields.
 
 Do not add policy keywords such as `ownerOnly`, `anyClient`, `broadcast`, `toOwner`, `toSender`, or
 `multicast` to the IDL. Authorization and fanout policy are expressed by generated helpers, world
@@ -205,8 +206,8 @@ Event helpers must support:
 Visibility/interest is a runtime fanout policy, not an IDL keyword.
 
 The generated user-facing API should not export standalone raw RPC definitions such as `PlayerMove`.
-Generated payload/context types may be exported for handler typing, but command/event usage should go
-through the endpoint facade.
+Generated payload/context types may be exported for handler typing, but command/event/stream usage
+should go through the endpoint facade.
 
 ## Runtime Validation
 
@@ -217,7 +218,7 @@ The runtime/generator should validate mechanical invariants before calling user 
 - event source exists
 - source/target entity type matches the endpoint that declared the RPC
 - payload decodes successfully
-- RPC direction matches command/event usage
+- RPC direction matches command/event/stream usage
 
 Entity type validation failures are logged with `logger.warn` and the packet is dropped. They should
 not throw into user handler code.
@@ -297,10 +298,14 @@ Low-level raw send/on primitives may remain inside the runtime for generated fac
 integrations that do not use `.snap`, but they are not the primary public docs model. Any exposed raw
 surface should be strict, small, and built on the same endpoint-addressed envelope.
 
-## Deferred Work
+## Related Work
 
-Command stream design is intentionally excluded from this document. It remains a future layer for
-high-frequency input and prediction-oriented traffic.
+Command stream is a separate client-to-server mechanism for high-frequency input. It uses `stream`
+declarations, the generated `streams.*` facade, `CommandStreamCtx<TPayload>`, and
+`MessageType.CommandStream`. The first version provides unreliable sample batching, sequence
+filtering, pending-sample limits, and minimal acknowledgements. It does not implement prediction,
+correction, or replay.
 
-Visibility/interest-aware event fanout is also future work. The immediate design only requires
-`broadcast()` and `sendTo(array)`.
+Visibility/interest-aware event fanout is part of endpoint event broadcast: `events.World.*.broadcast()`
+sends to all connected peers, `events.<Entity>.*.broadcast()` sends only to peers that can see the
+source entity, and `sendTo(peerEntity)` remains explicit point-to-point delivery.

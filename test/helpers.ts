@@ -8,6 +8,7 @@ import {
   type ClientTransport,
   type ComponentSchema,
   type EventDefinition,
+  type StreamDefinition,
   type ServerTransport,
   type PeerRef,
   type PrefabDefinition,
@@ -43,13 +44,15 @@ type ProtocolItem =
   | ComponentSchema
   | PrefabDefinition
   | CommandDefinition
-  | EventDefinition;
+  | EventDefinition
+  | StreamDefinition;
 
 export function testProtocol(...items: readonly ProtocolItem[]): ProtocolDefinition {
   const components: Record<string, ComponentSchema> = {};
   const prefabs: Record<string, PrefabDefinition> = {};
   const commands: Record<string, CommandDefinition> = {};
   const events: Record<string, EventDefinition> = {};
+  const streams: Record<string, StreamDefinition> = {};
 
   for (const item of items) {
     if (item.kind === "component") {
@@ -58,12 +61,14 @@ export function testProtocol(...items: readonly ProtocolItem[]): ProtocolDefinit
       prefabs[item.name] = item;
     } else if (item.kind === "command") {
       commands[item.name] = item;
+    } else if (item.kind === "stream") {
+      streams[item.name] = item;
     } else {
       events[item.name] = item;
     }
   }
 
-  return defineProtocol({ components, prefabs, commands, events });
+  return defineProtocol({ components, prefabs, commands, events, streams });
 }
 
 export function createTestServerWorld(protocol: ProtocolDefinition = defineProtocol({})) {

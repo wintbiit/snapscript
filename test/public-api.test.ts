@@ -21,6 +21,7 @@ const expectedValueExports = [
   "defineEntity",
   "defineEvent",
   "defineProtocol",
+  "defineStream",
   "enumOf",
   "f32",
   "flags",
