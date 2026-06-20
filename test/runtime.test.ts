@@ -26,7 +26,7 @@ import {
   WorldEntity,
 } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
-import { decodeCommandStreamAck, decodeRpc } from "../packages/snapscript/src/rpc/index";
+import { decodeCommandStreamAck, decodeRpc, encodeCommandStream } from "../packages/snapscript/src/rpc/index";
 import { createSyncClient, createSyncServer } from "../packages/snapscript/src/runtime/index";
 import { BitReader } from "../packages/snapscript/src/binary/index";
 import {
@@ -452,14 +452,17 @@ describe("sync runtime", () => {
   });
 
 
-  it("enforces maxStreamsPerPeer limit", () => {
+  it("throws when client command streams exceed maxStreamsPerPeer", () => {
     const Player = defineEntity("RuntimeStreamLimitPlayer", {
       hp: u16(100),
     });
     const MoveStream = defineStream("RuntimeMoveStreamLimit", {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
     });
-    const protocol = testProtocol(Player, MoveStream);
+    const AimStream = defineStream("RuntimeAimStreamLimit", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream, AimStream);
     const [serverTransport, clientTransport] = pair();
     const serverWorld = createServerWorld({
       protocol,
@@ -478,16 +481,79 @@ describe("sync runtime", () => {
     serverWorld.onCommandStream(MoveStream, (ctx) => {
       batches.push(`stream:${ctx.stream.name}`);
     });
+    serverWorld.onCommandStream(AimStream, (ctx) => {
+      batches.push(`stream:${ctx.stream.name}`);
+    });
 
     clientWorld.tick();
     serverWorld.tick();
     clientWorld.tick();
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
+    expect(() =>
+      clientWorld.pushCommandStream(player, AimStream, { dx: 0.5 }, 11, 16),
+    ).toThrow(/exceed maxStreamsPerPeer \(1\)/);
     clientWorld.tick();
     serverWorld.tick();
 
     expect(batches).toEqual(["stream:RuntimeMoveStreamLimit"]);
+    clientWorld.tick();
+    serverWorld.tick();
+    expect(batches).toEqual(["stream:RuntimeMoveStreamLimit"]);
+  });
+
+  it("warns and drops server command streams over maxStreamsPerPeer", () => {
+    const Player = defineEntity("RuntimeServerStreamLimitPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeServerMoveStreamLimit", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const AimStream = defineStream("RuntimeServerAimStreamLimit", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream, AimStream);
+    const registry = createRegistry().registerRpc(MoveStream).registerRpc(AimStream);
+    const serverWorld = createTestServerWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const logger: Logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+      logger,
+      streamLimits: { maxStreamsPerPeer: 1 },
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    host.onCommandStream(MoveStream, (ctx) => {
+      batches.push(`move:${ctx.target.id}:${ctx.samples.length}`);
+    });
+    host.onCommandStream(AimStream, (ctx) => {
+      batches.push(`aim:${ctx.target.id}:${ctx.samples.length}`);
+    });
+
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(MoveStream, 1, player.id, [{ sequence: 1, clientTick: 10, dtMs: 16, payload: { dx: 0.25 } }], 1),
+    );
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(AimStream, 1, player.id, [{ sequence: 1, clientTick: 11, dtMs: 16, payload: { dx: 0.5 } }], 2),
+    );
+
+    expect(batches).toEqual(["move:1:1"]);
+    expect(logger.warn).toHaveBeenCalledWith("Command stream packet dropped", expect.objectContaining({
+      maxStreamsPerPeer: 1,
+      peerEntityId: 1,
+      reason: "too many active streams for peer",
+      stream: AimStream.name,
+    }));
+    expect(decodeCommandStreamAck(serverTransport.packets.at(-1)!).streamId).toBe(MoveStream.rpcId);
   });
 
   it("enforces maxPendingSamples limit", () => {
@@ -570,6 +636,211 @@ describe("sync runtime", () => {
 
     expect(batches).toEqual(["2/0.5"]);
   });
+
+  it("prunes acknowledged command stream samples across packets", () => {
+    const Player = defineEntity("RuntimeStreamAckPrunePlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamAckPrune", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const [serverTransport, clientTransport] = pair();
+    const serverWorld = createServerWorld({
+      protocol,
+      transport: serverTransport,
+      clock: clock(),
+      streamLimits: { maxSamplesPerPacket: 2 },
+    });
+    const clientWorld = createClientWorld({
+      protocol,
+      transport: clientTransport,
+      clock: clock(),
+      streamLimits: { maxSamplesPerPacket: 2 },
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    serverWorld.onCommandStream(MoveStream, (ctx) => {
+      batches.push(ctx.samples.map((sample) => `${sample.sequence}/${sample.payload.dx.toFixed(1)}`).join(","));
+    });
+
+    clientWorld.tick();
+    serverWorld.tick();
+    clientWorld.tick();
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.1 }, 10, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.2 }, 11, 16);
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.3 }, 12, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+    expect(batches).toEqual(["2/0.2,3/0.3"]);
+
+    clientWorld.pushCommandStream(player, MoveStream, { dx: 0.4 }, 13, 16);
+    clientWorld.tick();
+    serverWorld.tick();
+    expect(batches).toEqual(["2/0.2,3/0.3", "4/0.4"]);
+  });
+
+  it("drops old command stream packets after newer packets", () => {
+    const Player = defineEntity("RuntimeStreamOldPacketPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamOldPacket", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const registry = createRegistry().registerRpc(MoveStream);
+    const serverWorld = createTestServerWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    host.onCommandStream(MoveStream, (ctx) => {
+      batches.push(ctx.samples.map((sample) => `${sample.sequence}/${sample.payload.dx.toFixed(1)}`).join(","));
+    });
+
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        MoveStream,
+        1,
+        player.id,
+        [{ sequence: 3, clientTick: 12, dtMs: 16, payload: { dx: 0.3 } }],
+        1,
+      ),
+    );
+    expect(decodeCommandStreamAck(serverTransport.packets.at(-1)!).lastProcessedSequence).toBe(3);
+
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        MoveStream,
+        1,
+        player.id,
+        [{ sequence: 2, clientTick: 11, dtMs: 16, payload: { dx: 0.2 } }],
+        2,
+      ),
+    );
+
+    expect(batches).toEqual(["3/0.3"]);
+    expect(decodeCommandStreamAck(serverTransport.packets.at(-1)!).lastProcessedSequence).toBe(3);
+  });
+
+  it("drops duplicate command stream samples in one packet", () => {
+    const Player = defineEntity("RuntimeStreamDuplicatePlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamDuplicate", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream);
+    const registry = createRegistry().registerRpc(MoveStream);
+    const serverWorld = createTestServerWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+    });
+    const player = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    host.onCommandStream(MoveStream, (ctx) => {
+      batches.push(ctx.samples.map((sample) => `${sample.sequence}/${sample.payload.dx.toFixed(1)}`).join(","));
+    });
+
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        MoveStream,
+        1,
+        player.id,
+        [
+          { sequence: 1, clientTick: 10, dtMs: 16, payload: { dx: 0.1 } },
+          { sequence: 1, clientTick: 11, dtMs: 16, payload: { dx: 0.2 } },
+          { sequence: 2, clientTick: 12, dtMs: 16, payload: { dx: 0.3 } },
+        ],
+        1,
+      ),
+    );
+
+    expect(batches).toEqual(["1/0.1,2/0.3"]);
+    expect(decodeCommandStreamAck(serverTransport.packets.at(-1)!).lastProcessedSequence).toBe(2);
+  });
+
+  it("tracks command stream sequences per target and stream", () => {
+    const Player = defineEntity("RuntimeStreamKeyPlayer", {
+      hp: u16(100),
+    });
+    const MoveStream = defineStream("RuntimeMoveStreamKey", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const AimStream = defineStream("RuntimeAimStreamKey", {
+      dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),
+    });
+    const protocol = testProtocol(Player, MoveStream, AimStream);
+    const registry = createRegistry().registerRpc(MoveStream).registerRpc(AimStream);
+    const serverWorld = createTestServerWorld(protocol);
+    const [serverTransport, clientTransport] = pair();
+    const host = createSyncServer({
+      world: serverWorld,
+      transport: serverTransport,
+      clock: clock(),
+      registry,
+    });
+    const playerA = serverWorld.spawn(Player);
+    const playerB = serverWorld.spawn(Player);
+    const batches: string[] = [];
+    host.onCommandStream(MoveStream, (ctx) => {
+      batches.push(`move:${ctx.target.id}:${ctx.samples.map((sample) => sample.sequence).join(",")}`);
+    });
+    host.onCommandStream(AimStream, (ctx) => {
+      batches.push(`aim:${ctx.target.id}:${ctx.samples.map((sample) => sample.sequence).join(",")}`);
+    });
+
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        MoveStream,
+        1,
+        playerA.id,
+        [{ sequence: 1, clientTick: 10, dtMs: 16, payload: { dx: 0.1 } }],
+        1,
+      ),
+    );
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        MoveStream,
+        1,
+        playerB.id,
+        [{ sequence: 1, clientTick: 11, dtMs: 16, payload: { dx: 0.2 } }],
+        2,
+      ),
+    );
+    clientTransport.send(
+      "unreliable",
+      encodeCommandStream(
+        AimStream,
+        1,
+        playerA.id,
+        [{ sequence: 1, clientTick: 12, dtMs: 16, payload: { dx: 0.3 } }],
+        3,
+      ),
+    );
+
+    expect(batches).toEqual([
+      `move:${playerA.id}:1`,
+      `move:${playerB.id}:1`,
+      `aim:${playerA.id}:1`,
+    ]);
+  });
+
   it("warns and drops RPCs when an endpoint validator fails", () => {
     const Move = defineCommand("RuntimeValidatedMove", {
       dx: qf32({ min: -1, max: 1, precision: 0.01, default: 0 }),

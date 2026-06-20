@@ -446,9 +446,18 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           streamsByPeer.set(peerEntityId, peerStreams);
         }
         const lastProcessed = streamSequences.get(key) ?? 0;
-        const samples = decoded.samples
+        const orderedSamples = decoded.samples
           .filter((sample) => sample.sequence > lastProcessed)
           .sort((left, right) => left.sequence - right.sequence);
+        const samples: typeof orderedSamples = [];
+        let nextLastProcessed = lastProcessed;
+        for (const sample of orderedSamples) {
+          if (sample.sequence <= nextLastProcessed) {
+            continue;
+          }
+          samples.push(sample);
+          nextLastProcessed = sample.sequence;
+        }
         if (samples.length === 0) {
           options.transport.send(
             peer,
@@ -457,7 +466,6 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           );
           return;
         }
-        const nextLastProcessed = samples.at(-1)!.sequence;
         streamSequences.set(key, nextLastProcessed);
         handlers.dispatchCommandStream(
           decoded.stream,

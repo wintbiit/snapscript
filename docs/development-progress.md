@@ -47,6 +47,9 @@ feature. The implemented abstraction is the generated TypeScript facade:
 - Stream handlers receive ordered sample batches.
 - Minimal stream acknowledgements let clients discard acknowledged pending samples.
 - Stream limits exist for `maxSamplesPerPacket`, `maxPendingSamples`, and `maxStreamsPerPeer`.
+- Stream tests cover batching, ack, client stream overflow, server stream overflow logging,
+  pending-sample trimming, max-samples-per-packet truncation, ack pruning across packets,
+  duplicate/old sample filtering, and independent `(peerEntity, target, stream)` tracking.
 
 ### Event Semantics
 
@@ -78,18 +81,13 @@ helpers, while handwritten protocols should use explicit source/target world met
 
 ### Stream Tests
 
-The stream runtime has end-to-end coverage for batching and ack. Limit coverage exists, but
-`maxStreamsPerPeer` should be strengthened to actually create a second stream and assert the
-intended failure/drop behavior.
+The core stream runtime has coverage for batching, limits, ack pruning, old packet drops,
+duplicate sample drops, and independent sequence keys. Remaining useful tests are now closer
+to integration behavior:
 
-Additional useful stream tests:
-
-- multiple stream definitions from one peer
-- one stream definition to multiple targets
-- duplicate/old sample filtering
-- server-side `maxStreamsPerPeer` drop logging
-- client-side `maxStreamsPerPeer` throw
-- ack pruning of pending samples across multiple packets
+- generated facade stream helpers in example projects
+- client resend behavior when ack packets are lost
+- command stream behavior under a lossy transport simulation
 
 ### Documentation Consistency
 
@@ -106,14 +104,14 @@ compatibility for tests and direct runtime experiments.
 
 ## Recommended Next Direction
 
-### 1. Strengthen Stream Limit Tests
+### 1. Add Stream Facade Integration Tests
 
-Before changing API shape, tighten stream behavior tests:
+The core runtime behavior is now covered. The next stream tests should verify the generated
+facade path:
 
-- make `maxStreamsPerPeer` tests cover real overflow
-- assert warning/drop details for server-side stream overflow
-- assert client-side throw details for local stream overflow
-- add multi-target and multi-stream ack pruning cases
+- generated `streams.*.push()` and `streams.*.on()` helpers
+- tick-phase flush through `ClientWorld.tick()`
+- resend behavior when stream ack packets are dropped
 
 This reduces risk before touching public world methods.
 
