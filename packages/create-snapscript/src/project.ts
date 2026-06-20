@@ -162,6 +162,7 @@ const packageJsonTemplate = `<%~ JSON.stringify({
   version: "0.0.0",
   private: true,
   type: "module",
+  packageManager: "pnpm@10.32.1",
   scripts: {
     "snap:check": \`snapscript check \${it.schemaScriptPath}\`,
     "snap:generate": \`snapscript generate \${it.schemaScriptPath} --out src/generated\`,
@@ -172,10 +173,10 @@ const packageJsonTemplate = `<%~ JSON.stringify({
     build: "pnpm snap:generate && pnpm typecheck && pnpm test",
   },
   dependencies: {
-    snapscript: "^0.0.0",
+    snapscript: "^0.1.0",
   },
   devDependencies: {
-    "snapscript-cli": "^0.0.0",
+    "snapscript-cli": "^0.1.0",
     typescript: "^5.9.3",
     vitest: "^4.0.8",
   },
@@ -476,9 +477,9 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    const position = client.get(1, Position);
+    const position = client.get(playerEntity, Position);
     expect(client.myPeerId()).toBe(1);
-    expect(client.isMine(1)).toBe(true);
+    expect(client.isMine(playerEntity)).toBe(false);
     expect(position?.x.value).toBe(0);
     expect(position?.y.value).toBe(0);
   });

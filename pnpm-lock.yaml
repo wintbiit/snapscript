@@ -166,7 +166,7 @@ importers:
         specifier: ^4.6.0
         version: 4.6.0
       snapscript-cli:
-        specifier: workspace:*
+        specifier: ^0.1.0
         version: link:../snapscript-cli
     devDependencies:
       '@types/node':
@@ -191,7 +191,7 @@ importers:
         specifier: ^24.0.0
         version: 24.12.4
       snapscript:
-        specifier: workspace:*
+        specifier: ^0.1.0
         version: link:../snapscript
 
 packages:

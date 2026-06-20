@@ -1,6 +1,6 @@
 {
   "name": "snapscript-monorepo",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "SnapScript workspace.",
   "license": "Apache-2.0",
   "type": "module",
@@ -16,6 +16,8 @@
     "example:simple:dev": "pnpm --dir examples/simple dev",
     "test:examples": "pnpm example:protocol:build && pnpm example:simple:build && pnpm example:ecs:build",
     "test": "vitest run",
+    "pack:dry-run": "node scripts/release-check.mjs --pack-only",
+    "release:check": "node scripts/release-check.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

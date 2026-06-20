@@ -1,9 +1,28 @@
 {
   "name": "snapscript",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Platform-agnostic TypeScript network synchronization framework.",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wintbiit/snapscript.git",
+    "directory": "packages/snapscript"
+  },
+  "homepage": "https://github.com/wintbiit/snapscript#readme",
+  "bugs": {
+    "url": "https://github.com/wintbiit/snapscript/issues"
+  },
+  "keywords": [
+    "ecs",
+    "networking",
+    "multiplayer",
+    "replication",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -13,6 +32,7 @@
       "import": "./dist/index.mjs"
     }
   },
+  "types": "./dist/index.d.mts",
   "files": [
     "dist"
   ],

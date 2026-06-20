@@ -1,9 +1,28 @@
 {
   "name": "snapscript-cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "SnapScript project and protocol generation CLI.",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wintbiit/snapscript.git",
+    "directory": "packages/snapscript-cli"
+  },
+  "homepage": "https://github.com/wintbiit/snapscript#readme",
+  "bugs": {
+    "url": "https://github.com/wintbiit/snapscript/issues"
+  },
+  "keywords": [
+    "snapscript",
+    "cli",
+    "idl",
+    "codegen",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -30,6 +49,6 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "snapscript": "workspace:*"
+    "snapscript": "^0.1.0"
   }
 }

@@ -1,9 +1,9 @@
-# Entity-Scoped RPC Model
+# Endpoint-Scoped RPC Model
 
 Last reviewed: 2026-06-20
 
-This document records the vNext RPC design direction for SnapScript. It is a breaking redesign.
-Compatibility with the previous service-scoped RPC API is not a goal.
+This document records the current endpoint-scoped RPC design for SnapScript. The model replaced the
+older service-scoped RPC shape; compatibility with that previous shape is not a goal.
 
 ## Decision
 
@@ -67,6 +67,7 @@ entity Player {
   health: Health
 
   command Move(dx: qf32(min: -1, max: 1, precision: 0.01, default: 0)) unreliable
+  stream MoveStream(dx: qf32(min: -1, max: 1, precision: 0.01, default: 0))
   event MoveDisabled(disabled: bool(default: false)) reliable
 }
 ```

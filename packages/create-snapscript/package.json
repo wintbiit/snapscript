@@ -1,9 +1,28 @@
 {
   "name": "create-snapscript",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Create a platform-neutral SnapScript game core package.",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wintbiit/snapscript.git",
+    "directory": "packages/create-snapscript"
+  },
+  "homepage": "https://github.com/wintbiit/snapscript#readme",
+  "bugs": {
+    "url": "https://github.com/wintbiit/snapscript/issues"
+  },
+  "keywords": [
+    "snapscript",
+    "create",
+    "scaffold",
+    "codegen",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -19,7 +38,7 @@
   },
   "dependencies": {
     "eta": "^4.6.0",
-    "snapscript-cli": "workspace:*"
+    "snapscript-cli": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"
