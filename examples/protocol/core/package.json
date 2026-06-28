@@ -14,7 +14,8 @@
   "devDependencies": {
     "snapscript-cli": "workspace:*",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.8"
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9"
   },
   "exports": {
     ".": "./src/index.ts",
