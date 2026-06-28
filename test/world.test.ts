@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { defineEntity, qf32, u16, vec2q } from "../packages/snapscript/src/index";
+import { createClientWorld, createServerWorld, defineComponent, defineEntity, qf32, u16, vec2q } from "../packages/snapscript/src/index";
 import { createRegistry } from "../packages/snapscript/src/registry/index";
 import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testClientTransport, testClock, testProtocol, testServerTransport } from "./helpers";
 
 describe("world and NetRef", () => {
   it("marks changed local refs dirty", () => {
@@ -116,5 +116,76 @@ describe("world and NetRef", () => {
 
     expect(b.get(player, PlayerState)?.hp.value).toBe(80);
     expect(worldInternals(b).getDirtyMask(player.id)).toBe(0);
+  });
+
+  it("registers local components on server and client worlds", () => {
+    const Local = defineComponent("RegisteredLocalComponent", { hp: u16(100) }, { replicated: false });
+    const protocol = testProtocol();
+    const server = createServerWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testServerTransport(),
+      clock: testClock(),
+    });
+    const client = createClientWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testClientTransport(),
+      clock: testClock(),
+    });
+
+    const serverEntity = server.spawn(Local, { hp: 80 });
+    const clientEntity = client.spawn(Local, { hp: 70 });
+
+    expect(server.get(serverEntity, Local)?.hp.value).toBe(80);
+    expect(client.get(clientEntity, Local)?.hp.value).toBe(70);
+  });
+
+  it("rejects invalid local component registration", () => {
+    const Replicated = defineComponent("InvalidLocalReplicatedComponent", { hp: u16(100) });
+    const Local = defineComponent("DuplicateLocalComponent", { hp: u16(100) }, { replicated: false });
+
+    expect(() =>
+      createServerWorld({
+        protocol: testProtocol(),
+        localComponents: [Replicated],
+        transport: testServerTransport(),
+        clock: testClock(),
+      }),
+    ).toThrow(/localComponents/);
+    expect(() =>
+      createClientWorld({
+        protocol: testProtocol(),
+        localComponents: [Local, Local],
+        transport: testClientTransport(),
+        clock: testClock(),
+      }),
+    ).toThrow(/duplicate local component/);
+  });
+
+  it("lets clients mutate local components but not replicated state", () => {
+    const Replicated = defineEntity("ClientReplicatedMutationPlayer", { hp: u16(100) });
+    const Local = defineComponent("ClientMutableLocalComponent", { hp: u16(100) }, { replicated: false });
+    const protocol = testProtocol(Replicated);
+    const server = createTestServerWorld(protocol);
+    const client = createClientWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testClientTransport(),
+      clock: testClock(),
+    });
+    const replicatedEntity = server.spawn(Replicated);
+    applySnapshot(client, encodeDirty(server, 1), createRegistry().registerComponent(Replicated.component));
+
+    const localEntity = client.spawn();
+    client.add(localEntity, Local, { hp: 50 });
+    client.get(localEntity, Local)!.hp.value = 40;
+
+    expect(client.get(localEntity, Local)?.hp.value).toBe(40);
+    expect(() => {
+      (client.get(replicatedEntity, Replicated.component) as any).hp.value = 10;
+    }).toThrow(/read-only replicated field/);
+    expect(() => client.add(replicatedEntity, Local)).toThrow(/replicated entity/);
+    expect(() => client.destroy(replicatedEntity)).toThrow(/replicated entity/);
   });
 });

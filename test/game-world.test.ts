@@ -922,10 +922,10 @@ describe("single world sync api", () => {
     expect(() => {
       (prefab.state.hp as { value: number }).value = 1;
     }).toThrow(/Cannot mutate read-only replicated field "ClientReadonlyPlayer.hp"/);
-    expect("spawn" in client).toBe(false);
-    expect("add" in client).toBe(false);
-    expect("remove" in client).toBe(false);
-    expect("destroy" in client).toBe(false);
+    expect(typeof client.spawn).toBe("function");
+    expect(typeof client.add).toBe("function");
+    expect(typeof client.remove).toBe("function");
+    expect(typeof client.destroy).toBe("function");
   });
 
   it("has stable name-hash ids and deterministic manifests", () => {

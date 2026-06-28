@@ -314,6 +314,7 @@ function validateAst(ast: SnapAst): void {
   const names = new Map<string, string>();
   for (const declaration of ast.declarations) {
     if (declaration.kind === "import") continue;
+    assertNoReplicatedInDeclaration(declaration);
     if (declaration.kind === "endpoint") {
       const previous = names.get(declaration.name);
       if (previous !== undefined) {
@@ -329,6 +330,22 @@ function validateAst(ast: SnapAst): void {
     names.set(declaration.name, declaration.kind);
   }
   buildContext(ast);
+}
+
+function assertNoReplicatedInDeclaration(declaration: Exclude<Decl, ImportDecl>): void {
+  if (declaration.kind === "component" || declaration.kind === "struct") {
+    for (const item of declaration.body) {
+      if (item.kind === "field") assertNoReplicatedArg(item.type);
+    }
+    return;
+  }
+  if (declaration.kind === "endpoint" || declaration.kind === "entity") {
+    for (const rpc of declaration.rpcs) {
+      for (const arg of rpc.args) {
+        assertNoReplicatedArg(arg.type);
+      }
+    }
+  }
 }
 
 function buildContext(ast: SnapAst) {
@@ -664,6 +681,7 @@ function emitFields(fields: readonly FieldItem[], enums: Map<string, EnumDecl>):
 }
 
 function emitType(type: TypeExpr, enums: Map<string, EnumDecl>): string {
+  assertNoReplicatedArg(type);
   const enumDecl = enums.get(type.name);
   if (enumDecl !== undefined) {
     const defaultArg = type.args.find((arg) => arg.name === "default")?.value;
@@ -710,6 +728,19 @@ function emitType(type: TypeExpr, enums: Map<string, EnumDecl>): string {
     return `${type.name}({ ${type.args.map((arg) => `${arg.name}: ${JSON.stringify(arg.value)}`).join(", ")} })`;
   }
   return `${type.name}(${type.args.map((arg) => JSON.stringify(arg.value)).join(", ")})`;
+}
+
+function assertNoReplicatedArg(type: TypeExpr): void {
+  for (const arg of type.args) {
+    if (arg.name === "replicated") {
+      throw new Error(
+        "replicated is not supported in .snap files; define local components in TypeScript and pass them through localComponents",
+      );
+    }
+    if (typeof arg.value === "object") {
+      assertNoReplicatedArg(arg.value);
+    }
+  }
 }
 
 function typedArg<TDefault extends string | number | boolean>(

@@ -43,9 +43,9 @@ type SnapshotUpdateOp = {
 export function encodeFullSnapshot(world: SnapshotWorld, tick: number): Uint8Array {
   const internals = worldInternals(world);
   return encodeSnapshotOps(world, tick, {
-    created: internals.getEntityIds(),
+    created: internals.getReplicatedEntityIds(),
     network: internals.getNetworkOwners(),
-    added: internals.getRecords().map((record) => ({
+    added: internals.getReplicatedRecords().map((record) => ({
       entityId: record.entityId,
       componentId: record.schema.schemaId,
     })),
@@ -55,7 +55,7 @@ export function encodeFullSnapshot(world: SnapshotWorld, tick: number): Uint8Arr
 export function encodeDirty(world: SnapshotWorld, tick: number): Uint8Array {
   const internals = worldInternals(world);
   const dirty = internals.getDirtySnapshot();
-  const bytes = encodeSnapshotOps(world, tick, dirty);
+  const bytes = encodeSnapshotOps(world, tick, snapshotWriteOps(internals, dirty));
   internals.clearWrittenDirty(dirty);
   return bytes;
 }
@@ -63,7 +63,7 @@ export function encodeDirty(world: SnapshotWorld, tick: number): Uint8Array {
 export function encodeDirtyBatched(world: SnapshotWorld, tick: number): Uint8Array {
   const internals = worldInternals(world);
   const dirty = internals.getDirtySnapshot();
-  const bytes = encodeSnapshotOpsBatched(world, tick, dirty);
+  const bytes = encodeSnapshotOpsBatched(world, tick, snapshotWriteOps(internals, dirty));
   internals.clearWrittenDirty(dirty);
   return bytes;
 }
@@ -443,6 +443,29 @@ export function hasSnapshotOps(ops: SnapshotWriteOps): boolean {
       (ops.destroyed?.length ?? 0) >
     0
   );
+}
+
+function snapshotWriteOps(
+  internals: ReturnType<typeof worldInternals>,
+  ops: SnapshotWriteOps,
+): SnapshotWriteOps {
+  const created = ops.created?.filter((entityId) => internals.isEntityReplicated(entityId));
+  const network = ops.network?.filter((op) => internals.isEntityReplicated(op.entityId));
+  const added = ops.added?.filter(
+    (op) => internals.isEntityReplicated(op.entityId) && internals.isComponentReplicated(op.componentId),
+  );
+  const updated = ops.updated?.filter(
+    (op) => internals.isEntityReplicated(op.entityId) && internals.isComponentReplicated(op.componentId),
+  );
+  const removed = ops.removed?.filter((op) => internals.isComponentReplicated(op.componentId));
+  return {
+    ...(created === undefined ? {} : { created }),
+    ...(network === undefined ? {} : { network }),
+    ...(added === undefined ? {} : { added }),
+    ...(updated === undefined ? {} : { updated }),
+    ...(removed === undefined ? {} : { removed }),
+    ...(ops.destroyed === undefined ? {} : { destroyed: ops.destroyed }),
+  };
 }
 
 export function applySnapshot(world: SnapshotWorld, bytes: Uint8Array, registry: RegistryLike): number {

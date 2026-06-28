@@ -86,3 +86,11 @@ export function createTestClientWorld(protocol: ProtocolDefinition = defineProto
     clock: testClock(),
   });
 }
+
+export function testServerTransport(): ServerTransport {
+  return new NullServerTransport();
+}
+
+export function testClientTransport(): ClientTransport {
+  return new NullClientTransport();
+}

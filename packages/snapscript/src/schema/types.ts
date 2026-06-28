@@ -23,6 +23,7 @@ export function isFieldDefinition(value: unknown): value is FieldDefinition<unkn
 export interface EntityOptions {
   readonly id?: number;
   readonly fieldIds?: Record<string, number>;
+  readonly replicated?: boolean;
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -71,10 +72,14 @@ export interface SchemaCodec<TFields extends FieldDefinitions = FieldDefinitions
   readDelta(reader: BinaryReader, instance: SchemaInstanceLike, fieldMask: number): void;
 }
 
-export interface EntitySchema<TFields extends FieldDefinitions = FieldDefinitions> {
+export interface EntitySchema<
+  TFields extends FieldDefinitions = FieldDefinitions,
+  TReplicated extends boolean = boolean,
+> {
   readonly kind: "component";
   readonly name: string;
   readonly schemaId: number;
+  readonly replicated: TReplicated;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly fields: {
     readonly [K in keyof TFields]: SchemaField<FieldValue<TFields[K]>>;
@@ -84,8 +89,10 @@ export interface EntitySchema<TFields extends FieldDefinitions = FieldDefinition
   readonly fullMask: number;
 }
 
-export interface InternalEntitySchema<TFields extends FieldDefinitions = FieldDefinitions>
-  extends EntitySchema<TFields> {
+export interface InternalEntitySchema<
+  TFields extends FieldDefinitions = FieldDefinitions,
+  TReplicated extends boolean = boolean,
+> extends EntitySchema<TFields, TReplicated> {
   readonly fields: {
     readonly [K in keyof TFields]: InternalSchemaField<FieldValue<TFields[K]>>;
   };
@@ -93,7 +100,10 @@ export interface InternalEntitySchema<TFields extends FieldDefinitions = FieldDe
   readonly codec: SchemaCodec<TFields>;
 }
 
-export type ComponentSchema<TFields extends FieldDefinitions = FieldDefinitions> = EntitySchema<TFields>;
+export type ComponentSchema<
+  TFields extends FieldDefinitions = FieldDefinitions,
+  TReplicated extends boolean = boolean,
+> = EntitySchema<TFields, TReplicated>;
 
 export type ComponentMap = Record<string, ComponentSchema>;
 

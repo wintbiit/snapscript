@@ -87,6 +87,23 @@ const serverWorld = createServerWorld({ protocol, transport, clock });
 const clientWorld = createClientWorld({ protocol, transport, clock });
 ```
 
+Both world factories also accept `localComponents` for non-replicated ECS state:
+
+```ts
+const ServerOnly = defineComponent("ServerOnly", { value: u32(0) }, { replicated: false });
+
+const serverWorld = createServerWorld({
+  protocol,
+  localComponents: [ServerOnly],
+  transport,
+  clock,
+});
+```
+
+`localComponents` accepts only `replicated: false` schemas. It rejects duplicate component ids and
+ids that collide with protocol components. Local components do not affect protocol hashes,
+manifests, wire registries, or generated code.
+
 The stable public world layer includes ECS and lifecycle operations:
 
 - entity/component operations: `spawn`, `add`, `remove`, `destroy`, `get`, `getComponent`,
@@ -143,6 +160,25 @@ import {
   vec3q,
 } from "snapscript";
 ```
+
+`defineComponent()` accepts an optional `replicated` flag:
+
+```ts
+const Health = defineComponent("Health", { hp: u16(100) });
+const ServerAi = defineComponent("ServerAi", { targetId: u32(0) }, { replicated: false });
+```
+
+`replicated` defaults to `true`. Replicated components may be used in `.snap` output or
+`defineProtocol({ components, prefabs })`. Non-replicated components are never protocol members and
+must be registered through `localComponents`.
+
+`.snap component` declarations are always replicated network state. The IDL intentionally rejects a
+`replicated` argument or metadata switch; use TypeScript for server-only or client-only components.
+
+Server worlds can create and mutate replicated and local components through the same `spawn`, `add`,
+`remove`, `destroy`, `get`, `has`, `query`, and `each` methods. Client worlds can create and mutate
+only local components and pure local entities; replicated state remains read-only and attempts to
+mutate replicated entities throw at runtime.
 
 ## Transport API
 

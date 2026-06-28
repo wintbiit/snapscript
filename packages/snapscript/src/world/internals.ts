@@ -13,7 +13,11 @@ export interface WorldInternals {
   getRecord(entityId: number, componentId?: number): ComponentRecord | undefined;
   getRecords(): readonly ComponentRecord[];
   getEntityIds(): readonly number[];
+  getReplicatedEntityIds(): readonly number[];
+  getReplicatedRecords(): readonly ComponentRecord[];
   getNetworkOwners(): readonly { readonly entityId: number; readonly owner: PeerId }[];
+  isEntityReplicated(entityId: number): boolean;
+  isComponentReplicated(componentId: number): boolean;
   getOwner(entityId: number): PeerId;
   getDirtySnapshot(): ReturnType<DirtyGraph["collectOps"]>;
   clearWrittenDirty(ops: ReturnType<DirtyGraph["collectOps"]>): void;

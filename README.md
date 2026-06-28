@@ -112,6 +112,11 @@ Endpoint blocks define routing:
 - `peer {}` maps to one replicated PeerEntity per connected peer.
 - `entity Player {}` maps to replicated gameplay entities with the declared component set.
 
+Every `component` declared in `.snap` is replicated network state and is readable on clients after it
+is synchronized. The IDL does not support `replicated` or local-only metadata. Keep server-only or
+client-only ECS state in TypeScript with `defineComponent(..., { replicated: false })` and register
+it through `localComponents` when creating a world.
+
 RPC direction is fixed by keyword:
 
 - `command` travels client to server.
@@ -220,6 +225,32 @@ const clientWorld = createClientWorld({
 });
 ```
 
+Local components use the same ECS API as replicated components, but they never enter the protocol
+manifest or snapshot stream:
+
+```ts
+const ServerAiState = defineComponent(
+  "ServerAiState",
+  { targetId: u32(0) },
+  { replicated: false },
+);
+
+const serverWorld = createServerWorld({
+  protocol,
+  localComponents: [ServerAiState],
+  transport: serverTransport,
+  clock,
+});
+
+const ai = serverWorld.spawn();
+serverWorld.add(ai, ServerAiState, { targetId: 0 });
+```
+
+`replicated` defaults to `true` for `defineComponent()`. `defineProtocol()` rejects non-replicated
+components and prefabs; pass them through `localComponents` instead. Pure local entities are omitted
+from snapshots until a replicated component is added. When the last replicated component is removed,
+the remote network entity is destroyed.
+
 Transports move packet bytes and channel labels:
 
 ```ts
@@ -289,6 +320,22 @@ serverWorld.onCommand(StartGame, (ctx) => {
 // Send after the client has completed the SnapScript hello/full-snapshot handshake.
 clientWorld.sendCommand(WorldEntity, StartGame, {});
 ```
+
+Handwritten protocols may still use local components:
+
+```ts
+const DebugTag = defineComponent("DebugTag", { color: u8(0) }, { replicated: false });
+
+const clientWorld = createClientWorld({
+  protocol,
+  localComponents: [DebugTag],
+  transport: clientTransport,
+  clock,
+});
+```
+
+Do not put `DebugTag` in `defineProtocol({ components })`; non-replicated components are private to
+the world instance that registers them.
 
 Generated projects should prefer `commands.*`, `events.*`, `streams.*`, and `entities.*`. The package
 root intentionally does not export packet codecs, binary readers/writers, storage classes, low-level

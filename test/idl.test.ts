@@ -177,4 +177,10 @@ component Stats {
     expect(() => checkSnap('syntax = "v1"\nworld { a: A }\n')).toThrow(/unknown component "A"/);
     expect(() => checkSnap('syntax = "v1"\nservice S { event Done(ok: bool) ordered }\n')).toThrow();
   });
+
+  it("rejects replicated metadata in .snap files", () => {
+    expect(() => checkSnap('syntax = "v1"\ncomponent A { x: u8(default: 0, replicated: false) }\n')).toThrow(
+      /replicated.*TypeScript.*localComponents/,
+    );
+  });
 });

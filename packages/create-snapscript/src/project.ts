@@ -173,10 +173,10 @@ const packageJsonTemplate = `<%~ JSON.stringify({
     build: "pnpm snap:generate && pnpm typecheck && pnpm test",
   },
   dependencies: {
-    snapscript: "^0.2.0",
+    snapscript: "^0.3.0",
   },
   devDependencies: {
-    "snapscript-cli": "^0.2.0",
+    "snapscript-cli": "^0.3.0",
     typescript: "^5.9.3",
     vitest: "^4.1.9",
   },

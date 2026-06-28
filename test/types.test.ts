@@ -394,7 +394,6 @@ if (false) {
   host.clearDirty();
   // @ts-expect-error clients do not author replicated entities
   client.spawn(Position);
-  // @ts-expect-error clients do not author replicated entities
   client.spawn();
   // @ts-expect-error systems are driven through tick(), not an exposed phase runner
   client.runSystems("update");

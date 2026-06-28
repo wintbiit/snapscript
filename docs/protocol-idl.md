@@ -148,6 +148,11 @@ RPC is declared inside endpoints:
 Endpoint blocks contain component references, commands, events, and streams. They do not declare
 inline fields or implicitly generate endpoint components.
 
+Every `component` declared in `.snap` is replicated network state. The IDL does not support a
+`replicated` option, field argument, or metadata switch. Server-only and client-only ECS state is
+defined in TypeScript with `defineComponent(..., { replicated: false })` and registered through
+`createServerWorld({ localComponents })` or `createClientWorld({ localComponents })`.
+
 World commands target `WorldEntity`. Peer commands target the sending PeerEntity. Entity commands
 target a specific gameplay entity ref.
 
@@ -258,6 +263,9 @@ target visibility, and other project rules.
 
 - The generated facade does not expose an explicit id escape hatch; public calls use entity refs and
   payload objects.
+- Local components are not part of `.snap`, manifests, generated registries, or protocol hashes.
+- A `.snap` type expression that uses `replicated: ...` is rejected during check/generate with an
+  error that points users to TypeScript `localComponents`.
 - Handwritten TypeScript protocols can use public world RPC methods directly, but packet codecs and
   low-level sync runtimes remain internal.
 - Public world APIs do not accept numeric entity ids as entity inputs; use refs from `WorldEntity`,

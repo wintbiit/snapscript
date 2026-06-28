@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   bool,
+  createClientWorld,
+  defineComponent,
   defineEntity,
+  createServerWorld,
   u16,
   angle16,
 } from "../packages/snapscript/src/index";
@@ -15,7 +18,14 @@ import {
   SnapshotOp,
 } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
+import {
+  createTestClientWorld,
+  createTestServerWorld,
+  testClientTransport,
+  testClock,
+  testProtocol,
+  testServerTransport,
+} from "./helpers";
 
 describe("snapshot sync", () => {
   it("applies create snapshots with final field values", () => {
@@ -39,6 +49,74 @@ describe("snapshot sync", () => {
 
     expect(b.get(player, PlayerState)?.hp.value).toBe(80);
     expect(b.get(player, PlayerState)?.dead.value).toBe(false);
+  });
+
+  it("does not encode local-only components or pure local entities", () => {
+    const Local = defineComponent("SnapshotLocalOnlyComponent", { hp: u16(100) }, { replicated: false });
+    const world = createServerWorld({
+      protocol: testProtocol(),
+      localComponents: [Local],
+      transport: testServerTransport(),
+      clock: testClock(),
+    });
+    const entity = world.spawn();
+    world.add(entity, Local, { hp: 10 });
+
+    expect(entity.id).toBeGreaterThan(0);
+    expect(encodeDirty(world, 1)).toEqual(new Uint8Array([1, 1, 0, 0, 0, 0]));
+    expect(encodeFullSnapshot(world, 2)).toEqual(new Uint8Array([1, 2, 0, 0, 0, 0]));
+  });
+
+  it("starts replicating an entity when its first replicated component is added", () => {
+    const Local = defineComponent("SnapshotLateLocalComponent", { hp: u16(100) }, { replicated: false });
+    const Replicated = defineComponent("SnapshotLateReplicatedComponent", { hp: u16(100) });
+    const registry = createRegistry().registerComponent(Replicated);
+    const protocol = testProtocol(Replicated);
+    const server = createServerWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testServerTransport(),
+      clock: testClock(),
+    });
+    const client = createClientWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testClientTransport(),
+      clock: testClock(),
+    });
+    const entity = server.spawn();
+    server.add(entity, Local, { hp: 10 });
+
+    expect(encodeDirty(server, 1)).toEqual(new Uint8Array([1, 1, 0, 0, 0, 0]));
+    server.add(entity, Replicated, { hp: 90 });
+    applySnapshot(client, encodeDirty(server, 2), registry);
+
+    expect(client.get(entity, Replicated)?.hp.value).toBe(90);
+    expect(client.has(entity, Local)).toBe(false);
+  });
+
+  it("destroys a remote entity after its last replicated component is removed", () => {
+    const Local = defineComponent("SnapshotRemoveLocalComponent", { hp: u16(100) }, { replicated: false });
+    const Replicated = defineComponent("SnapshotRemoveReplicatedComponent", { hp: u16(100) });
+    const registry = createRegistry().registerComponent(Replicated);
+    const protocol = testProtocol(Replicated);
+    const server = createServerWorld({
+      protocol,
+      localComponents: [Local],
+      transport: testServerTransport(),
+      clock: testClock(),
+    });
+    const client = createTestClientWorld(protocol);
+    const entity = server.spawn();
+    server.add(entity, Replicated, { hp: 90 });
+    server.add(entity, Local, { hp: 10 });
+    applySnapshot(client, encodeDirty(server, 1), registry);
+
+    server.remove(entity, Replicated);
+    applySnapshot(client, encodeDirty(server, 2), registry);
+
+    expect(client.has(entity, Replicated)).toBe(false);
+    expect(client.ownerOf(entity)).toBe(0);
   });
 
   it("omits field masks for create and destroy ops", () => {

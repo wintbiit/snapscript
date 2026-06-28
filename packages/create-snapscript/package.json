@@ -1,6 +1,6 @@
 {
   "name": "create-snapscript",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Create a platform-neutral SnapScript game core package.",
   "license": "Apache-2.0",
   "type": "module",
@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "eta": "^4.6.0",
-    "snapscript-cli": "^0.2.0"
+    "snapscript-cli": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"

@@ -1,6 +1,6 @@
 {
   "name": "snapscript-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "SnapScript project and protocol generation CLI.",
   "license": "Apache-2.0",
   "type": "module",
@@ -49,6 +49,6 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "snapscript": "^0.2.0"
+    "snapscript": "^0.3.0"
   }
 }

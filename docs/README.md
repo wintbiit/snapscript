@@ -19,6 +19,8 @@ state.
 - `world {}` maps to the reserved `WorldEntity`.
 - `peer {}` maps to one replicated PeerEntity per connected peer.
 - `entity Name {}` maps to replicated gameplay entities with the declared component set.
+- `.snap component` declarations are replicated; local-only components are TypeScript-only
+  `defineComponent(..., { replicated: false })` schemas registered through `localComponents`.
 - `command` travels client to server.
 - `event` travels server to client.
 - `stream` travels client to server as an unreliable command stream.

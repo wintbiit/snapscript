@@ -366,6 +366,8 @@ export interface ServerWorldOptions {
   readonly interest?: (peerId: PeerId, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
   /** Optional command-stream resource limits. */
   readonly streamLimits?: Partial<CommandStreamLimits>;
+  /** Non-replicated components available only in this world instance. */
+  readonly localComponents?: readonly ComponentSchema[];
 }
 
 /**
@@ -385,6 +387,8 @@ export interface ClientWorldOptions {
   readonly logger?: Logger;
   /** Optional command-stream resource limits. */
   readonly streamLimits?: Partial<CommandStreamLimits>;
+  /** Non-replicated components available only in this world instance. */
+  readonly localComponents?: readonly ComponentSchema[];
 }
 
 /**
@@ -434,7 +438,11 @@ function createWorldInternals(core: WorldCore): WorldInternals {
     getRecord: (entityId, componentId) => core._getRecord(entityId, componentId),
     getRecords: () => core._getRecords(),
     getEntityIds: () => core._getEntityIds(),
+    getReplicatedEntityIds: () => core._getReplicatedEntityIds(),
+    getReplicatedRecords: () => core._getReplicatedRecords(),
     getNetworkOwners: () => core._getNetworkOwners(),
+    isEntityReplicated: (entityId) => core._isEntityReplicated(entityId),
+    isComponentReplicated: (componentId) => core._isComponentReplicated(componentId),
     getOwner: (entityId) => core.ownerOf(entityId),
     getDirtySnapshot: () => core._getDirtySnapshot(),
     clearWrittenDirty: (ops) => core._clearWrittenDirty(ops),
@@ -468,14 +476,27 @@ class WorldCore implements QueryWorldAccess {
   readonly #componentIdCache = new WeakMap<readonly ComponentSchema[], readonly number[]>();
   readonly #protocol: ProtocolDefinition;
   readonly #protocolPrefabs = new WeakSet<PrefabDefinition>();
+  readonly #localComponents = new WeakSet<ComponentSchema>();
+  readonly #localComponentIds = new Set<number>();
+  readonly #replicatedEntities = new Set<number>();
   readonly #knownProtocolComponents = new WeakSet<ComponentSchema>();
   readonly #knownProtocolPrefabs = new WeakSet<PrefabDefinition>();
   #nextEntityId = 1;
 
-  constructor(protocol: ProtocolDefinition) {
+  constructor(
+    protocol: ProtocolDefinition,
+    localComponents: readonly ComponentSchema[] | undefined,
+    label: "createServerWorld" | "createClientWorld",
+    nextEntityId = 1,
+  ) {
     this.#protocol = protocol;
+    this.#nextEntityId = nextEntityId;
     for (const prefab of Object.values(protocol.prefabs)) {
       this.#protocolPrefabs.add(prefab);
+    }
+    for (const component of assertLocalComponents(protocol, localComponents, label)) {
+      this.#localComponents.add(component);
+      this.#localComponentIds.add(component.schemaId);
     }
     this.#storage.addEntity(WorldEntity.id);
     this.#entityRefs.set(WorldEntity.id, WorldEntity);
@@ -605,7 +626,10 @@ class WorldCore implements QueryWorldAccess {
 
     const record = this.#createRecord(component, entityId, initial);
     this.#storage.set(entityId, component.schemaId, record as ComponentRecord);
-    this.dirty.markAdded(entityId, component.schemaId);
+    if (component.replicated) {
+      this.#markEntityReplicated(entityId);
+      this.dirty.markAdded(entityId, component.schemaId);
+    }
     return record.instance;
   }
 
@@ -736,10 +760,13 @@ class WorldCore implements QueryWorldAccess {
       let removed = false;
       for (const component of componentOrPrefab.componentList) {
         if (this.#storage.remove(entityId, component.schemaId)) {
-          this.dirty.markRemoved(entityId, component.schemaId);
+          if (component.replicated) {
+            this.dirty.markRemoved(entityId, component.schemaId);
+          }
           removed = true;
         }
       }
+      this.#markEntityLocalIfNoReplicatedComponents(entityId);
       return removed;
     }
 
@@ -748,7 +775,10 @@ class WorldCore implements QueryWorldAccess {
       return false;
     }
 
-    this.dirty.markRemoved(entityId, componentOrPrefab.schemaId);
+    if (componentOrPrefab.replicated) {
+      this.dirty.markRemoved(entityId, componentOrPrefab.schemaId);
+    }
+    this.#markEntityLocalIfNoReplicatedComponents(entityId);
     return true;
   }
 
@@ -763,8 +793,11 @@ class WorldCore implements QueryWorldAccess {
 
     this.#entityRefs.delete(entityId);
     this.#readonlyEntityRefs.delete(entityId);
+    const wasReplicated = this.#replicatedEntities.delete(entityId);
     this.#clearOwnerInternal(entityId);
-    this.dirty.markDestroyed(entityId);
+    if (wasReplicated) {
+      this.dirty.markDestroyed(entityId);
+    }
     return true;
   }
 
@@ -781,7 +814,9 @@ class WorldCore implements QueryWorldAccess {
       throw new Error("world.setOwner() cannot change WorldEntity ownership");
     }
     this.#setOwnerInternal(entityId, peerId);
-    this.dirty.markNetworkChanged(entityId);
+    if (this.#replicatedEntities.has(entityId)) {
+      this.dirty.markNetworkChanged(entityId);
+    }
   }
 
   clearOwner(entity: number | EntityRef): void {
@@ -1055,10 +1090,30 @@ class WorldCore implements QueryWorldAccess {
     return this.#storage.entityIds();
   }
 
+  _getReplicatedEntityIds(): readonly number[] {
+    return [...this.#replicatedEntities].sort((a, b) => a - b);
+  }
+
+  _getReplicatedRecords(): readonly ComponentRecord[] {
+    return this.#storage
+      .records()
+      .filter((record) => record.schema.replicated && this.#replicatedEntities.has(record.entityId));
+  }
+
   _getNetworkOwners(): readonly { readonly entityId: number; readonly owner: PeerId }[] {
     return [...this.#owners.entries()]
+      .filter(([entityId]) => this.#replicatedEntities.has(entityId))
       .map(([entityId, owner]) => ({ entityId, owner }))
       .sort((a, b) => a.entityId - b.entityId);
+  }
+
+  _isEntityReplicated(entityId: number): boolean {
+    return this.#replicatedEntities.has(entityId);
+  }
+
+  _isComponentReplicated(componentId: number): boolean {
+    const schema = registryForProtocol(this.#protocol).getSchema(componentId);
+    return schema?.replicated === true;
   }
 
   _queryRows(components: readonly ComponentSchema[]) {
@@ -1135,6 +1190,9 @@ class WorldCore implements QueryWorldAccess {
 
     const record = this.#createRecord(component, entityId);
     this.#storage.set(entityId, component.schemaId, record as ComponentRecord);
+    if (component.replicated) {
+      this.#replicatedEntities.add(entityId);
+    }
     this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
     return record.instance;
   }
@@ -1142,6 +1200,7 @@ class WorldCore implements QueryWorldAccess {
   _applyCreateEntityFromRemote(entityId: number): void {
     assertEntityId(entityId, "remote snapshot");
     this.#ensureEntity(entityId, false);
+    this.#replicatedEntities.add(entityId);
     this.#nextEntityId = Math.max(this.#nextEntityId, entityId + 1);
   }
 
@@ -1149,12 +1208,17 @@ class WorldCore implements QueryWorldAccess {
     assertEntityId(entityId, "remote snapshot");
     assertPeerId(owner, "remote snapshot");
     this.#ensureEntity(entityId, false);
+    this.#replicatedEntities.add(entityId);
     this.#setOwnerInternal(entityId, owner);
   }
 
   _applyRemoveFromRemote(entityId: number, componentId: number): void {
     assertEntityId(entityId, "remote snapshot");
+    const record = this.#storage.get(entityId, componentId);
     this.#storage.remove(entityId, componentId);
+    if (record?.schema.replicated === true) {
+      this.#markEntityLocalIfNoReplicatedComponents(entityId);
+    }
   }
 
   _applyDestroyFromRemote(entityId: number, _schemaId?: number): void {
@@ -1165,6 +1229,7 @@ class WorldCore implements QueryWorldAccess {
     this.#storage.deleteEntity(entityId);
     this.#entityRefs.delete(entityId);
     this.#readonlyEntityRefs.delete(entityId);
+    this.#replicatedEntities.delete(entityId);
     this.#clearOwnerInternal(entityId);
   }
 
@@ -1184,6 +1249,37 @@ class WorldCore implements QueryWorldAccess {
     if (markDirty) {
       this.dirty.markCreated(entityId);
     }
+  }
+
+  #markEntityReplicated(entityId: number): void {
+    if (this.#replicatedEntities.has(entityId)) {
+      return;
+    }
+    this.#replicatedEntities.add(entityId);
+    this.dirty.markCreated(entityId);
+    if (this.#owners.has(entityId)) {
+      this.dirty.markNetworkChanged(entityId);
+    }
+  }
+
+  #markEntityLocalIfNoReplicatedComponents(entityId: number): void {
+    if (!this.#replicatedEntities.has(entityId)) {
+      return;
+    }
+    if (this.#hasReplicatedComponents(entityId)) {
+      return;
+    }
+    this.#replicatedEntities.delete(entityId);
+    if (entityId === WorldEntity.id) {
+      return;
+    }
+    this.dirty.markDestroyed(entityId);
+  }
+
+  #hasReplicatedComponents(entityId: number): boolean {
+    return this.#storage
+      .records()
+      .some((record) => record.entityId === entityId && record.schema.replicated);
   }
 
   #assertEntityExists(entityId: number, label: string): void {
@@ -1327,7 +1423,9 @@ class WorldCore implements QueryWorldAccess {
           : field.defaultValue;
       const meta = this.#createFieldMeta(schema, entityId, field);
       instance[fieldName] = new NetRefImpl(meta, initialValue, (dirtyMeta) => {
-        this.dirty.markUpdated(dirtyMeta.entityId, dirtyMeta.schemaId, dirtyMeta.fieldId);
+        if (schema.replicated && this.#replicatedEntities.has(dirtyMeta.entityId)) {
+          this.dirty.markUpdated(dirtyMeta.entityId, dirtyMeta.schemaId, dirtyMeta.fieldId);
+        }
       });
     }
 
@@ -1468,8 +1566,13 @@ class WorldCore implements QueryWorldAccess {
       return;
     }
 
+    if (this.#localComponents.has(component)) {
+      this.#knownProtocolComponents.add(component);
+      return;
+    }
+
     throw new Error(
-      `Cannot ${operation} component "${component.name}" because it is not registered in this world protocol`,
+      `Cannot ${operation} component "${component.name}" because it is not registered in this world protocol or localComponents`,
     );
   }
 }
@@ -1773,7 +1876,7 @@ class ServerWorldImpl implements ServerWorld {
   constructor(options: ServerWorldOptions) {
     assertServerWorldOptions(options);
     const clock = checkedClock("createServerWorld()", options.clock);
-    this.#core = new WorldCore(options.protocol);
+    this.#core = new WorldCore(options.protocol, options.localComponents, "createServerWorld");
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
     this.#clock = clock;
@@ -2164,14 +2267,32 @@ class ServerWorldImpl implements ServerWorld {
 
 /** Replicated client world handle. Clients read state, run client systems, send commands, and receive events. */
 export interface ClientWorld {
+  /** Creates an empty client-local entity. */
+  spawn(): EntityRef;
+  /** Creates a client-local entity with one non-replicated component. */
+  spawn<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields, false>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  /** Adds a non-replicated component to a client-local entity. */
+  add<TFields extends FieldDefinitions>(
+    entity: EntityRef,
+    component: ComponentSchema<TFields, false>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
   /** Reads a world-level replicated component from the reserved `WorldEntity`. */
   getComponent<TFields extends FieldDefinitions>(
     component: ComponentSchema<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
+  /** Reads a non-replicated client-local component as mutable state. */
+  get<TFields extends FieldDefinitions>(
+    entity: ReadonlyEntityRef,
+    component: ComponentSchema<TFields, false>,
+  ): ComponentInstance<TFields> | undefined;
   /** Reads a replicated component or simple prefab primary component. */
   get<TFields extends FieldDefinitions>(
     entity: ReadonlyEntityRef,
-    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+    componentOrPrefab: ComponentSchema<TFields, true> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads every component in a composite prefab as read-only replicated state. */
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
@@ -2204,6 +2325,10 @@ export interface ClientWorld {
     components: TComponents,
     fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
   ): void;
+  /** Removes a non-replicated component from a client-local entity. */
+  remove(entity: EntityRef, component: ComponentSchema<FieldDefinitions, false>): boolean;
+  /** Destroys a client-local entity. */
+  destroy(entity: EntityRef): boolean;
   /** Registers a named client-side system. The returned function unregisters it. */
   system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void;
   /** Advances transport input and client systems once. */
@@ -2250,7 +2375,7 @@ class ClientWorldImpl implements ClientWorld {
   constructor(options: ClientWorldOptions) {
     assertClientWorldOptions(options);
     const clock = checkedClock("createClientWorld()", options.clock);
-    this.#core = new WorldCore(options.protocol);
+    this.#core = new WorldCore(options.protocol, options.localComponents, "createClientWorld", 0x8000_0000);
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
     this.#clock = clock;
@@ -2264,15 +2389,54 @@ class ClientWorldImpl implements ClientWorld {
     Object.freeze(this);
   }
 
+  spawn(): EntityRef;
+  spawn<TFields extends FieldDefinitions>(
+    component: ComponentSchema<TFields, false>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  spawn(
+    component?: ComponentSchema<FieldDefinitions>,
+    initial?: Partial<FieldValues<FieldDefinitions>>,
+  ): EntityRef | ComponentInstance<FieldDefinitions> {
+    if (component === undefined) {
+      return this.#core.entity();
+    }
+    assertClientLocalComponent(component, "ClientWorld.spawn()");
+    return this.#core.spawnAny(component, initial);
+  }
+
+  add<TFields extends FieldDefinitions>(
+    entity: EntityRef,
+    component: ComponentSchema<TFields, false>,
+    initial?: Partial<FieldValues<TFields>>,
+  ): ComponentInstance<TFields>;
+  add(
+    entity: EntityRef,
+    component: ComponentSchema<FieldDefinitions>,
+    initial?: Partial<FieldValues<FieldDefinitions>>,
+  ): ComponentInstance<FieldDefinitions> {
+    entityIdFromRef(entity, "ClientWorld.add()");
+    assertClientLocalComponent(component, "ClientWorld.add()");
+    this.#assertClientLocalEntity(entity, "ClientWorld.add()");
+    return this.#core.add(entity, component, initial);
+  }
+
   get<TFields extends FieldDefinitions>(
     entity: ReadonlyEntityRef,
-    componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
+    component: ComponentSchema<TFields, false>,
+  ): ComponentInstance<TFields> | undefined;
+  get<TFields extends FieldDefinitions>(
+    entity: ReadonlyEntityRef,
+    componentOrPrefab: ComponentSchema<TFields, true> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
   get(
     entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
-  ): ReadonlyComponentInstance<FieldDefinitions> | undefined {
+  ): ComponentInstance<FieldDefinitions> | ReadonlyComponentInstance<FieldDefinitions> | undefined {
     entityIdFromRef(entity, "ClientWorld.get()");
+    if (!hasComponentList(componentOrPrefab) && componentOrPrefab.replicated === false) {
+      return this.#core.getAny(entity, componentOrPrefab);
+    }
     return this.#core.getReadonly(
       entity,
       componentOrPrefab,
@@ -2342,6 +2506,19 @@ class ClientWorldImpl implements ClientWorld {
     fn: EachFn<TComponents, ReadonlyEntityRef, "readonly">,
   ): void {
     this.#core.eachReadonly(components, fn);
+  }
+
+  remove(entity: EntityRef, component: ComponentSchema<FieldDefinitions, false>): boolean {
+    entityIdFromRef(entity, "ClientWorld.remove()");
+    assertClientLocalComponent(component, "ClientWorld.remove()");
+    this.#assertClientLocalEntity(entity, "ClientWorld.remove()");
+    return this.#core.remove(entity, component);
+  }
+
+  destroy(entity: EntityRef): boolean {
+    entityIdFromRef(entity, "ClientWorld.destroy()");
+    this.#assertClientLocalEntity(entity, "ClientWorld.destroy()");
+    return this.#core.destroy(entity);
   }
 
   system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void {
@@ -2426,6 +2603,13 @@ class ClientWorldImpl implements ClientWorld {
 
   requestFullSnapshot(): void {
     this.#runtime.requestFullSnapshot();
+  }
+
+  #assertClientLocalEntity(entity: ReadonlyEntityRef, label: string): void {
+    const entityId = entityIdFromRef(entity, label);
+    if (this.#core._isEntityReplicated(entityId)) {
+      throw new Error(`${label} cannot mutate a replicated entity`);
+    }
   }
 
   #assignedPeerEntity(label: string): ReadonlyEntityRef {
@@ -2557,6 +2741,48 @@ function assertProtocolRpc(
   );
 }
 
+function assertLocalComponents(
+  protocol: ProtocolDefinition,
+  components: readonly ComponentSchema[] | undefined,
+  factoryName: "createServerWorld" | "createClientWorld",
+): readonly ComponentSchema[] {
+  if (components === undefined) {
+    return [];
+  }
+  if (!Array.isArray(components)) {
+    throw new Error(`${factoryName}() localComponents must be an array`);
+  }
+
+  const seen = new Set<number>();
+  for (const [index, component] of components.entries()) {
+    assertComponentSchema(component, `${factoryName}() localComponents[${index}]`);
+    if (component.replicated) {
+      throw new Error(`${factoryName}() localComponents must contain non-replicated components`);
+    }
+    if (seen.has(component.schemaId)) {
+      throw new Error(`${factoryName}() duplicate local component "${component.name}"`);
+    }
+    seen.add(component.schemaId);
+    const protocolComponent = registryForProtocol(protocol).getSchema(component.schemaId);
+    if (protocolComponent !== undefined) {
+      throw new Error(
+        `${factoryName}() local component "${component.name}" conflicts with protocol component "${protocolComponent.name}"`,
+      );
+    }
+  }
+  return components;
+}
+
+function assertClientLocalComponent(
+  component: unknown,
+  label: string,
+): asserts component is ComponentSchema<FieldDefinitions, false> {
+  assertComponentSchema(component, label);
+  if (component.replicated) {
+    throw new Error(`${label} cannot mutate a replicated component`);
+  }
+}
+
 function isRpcDefinition(value: unknown): value is RpcDefinition {
   return (
     value !== null &&
@@ -2625,6 +2851,7 @@ const serverWorldOptionKeys = new Set([
   "visibility",
   "interest",
   "streamLimits",
+  "localComponents",
 ]);
 
 const clientWorldOptionKeys = new Set([
@@ -2634,6 +2861,7 @@ const clientWorldOptionKeys = new Set([
   "logger",
   "onSnapshot",
   "streamLimits",
+  "localComponents",
 ]);
 
 function assertKnownOptionKeys(

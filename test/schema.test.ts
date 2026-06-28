@@ -49,6 +49,20 @@ describe("schema", () => {
     ).toThrow(/id must be an integer in \[0, 31\]/);
   });
 
+  it("defaults components to replicated and supports explicit local components", () => {
+    const Replicated = defineComponent("DefaultReplicatedComponent", { hp: u16(100) });
+    const Local = defineComponent("ExplicitLocalComponent", { hp: u16(100) }, { replicated: false });
+
+    expect(Replicated.replicated).toBe(true);
+    expect(Local.replicated).toBe(false);
+  });
+
+  it("rejects invalid replicated component options", () => {
+    expect(() =>
+      defineComponent("InvalidReplicatedOption", { hp: u16(100) }, { replicated: "false" } as never),
+    ).toThrow(/replicated must be a boolean/);
+  });
+
   it("rejects schemas with more than 32 fields", () => {
     const fields = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`f${index}`, u8(0)]));
     expect(() => defineEntity("TooManyFields", fields)).toThrow(/at most 32/);
@@ -77,6 +91,24 @@ describe("schema", () => {
     expect(() =>
       defineComponent("DateComponentMetadata", { hp: u16(1) }, { metadata: new Date() as never }),
     ).toThrow(/Component "DateComponentMetadata" metadata must be an object/);
+  });
+
+  it("keeps metadata separate from replicated semantics", () => {
+    const Component = defineComponent("MetadataReplicatedComponent", { hp: u16(100) }, {
+      metadata: { replicated: false },
+    });
+
+    expect(Component.replicated).toBe(true);
+    expect(Component.metadata).toEqual({ replicated: false });
+  });
+
+  it("rejects non-replicated components from network protocols", () => {
+    const Local = defineComponent("ProtocolLocalComponent", { hp: u16(100) }, { replicated: false });
+    const Replicated = defineComponent("ProtocolReplicatedComponent", { hp: u16(100) });
+    const Mixed = defineEntity("ProtocolMixedEntity", { replicated: Replicated, local: Local });
+
+    expect(() => defineProtocol({ components: { Local } })).toThrow(/localComponents/);
+    expect(() => defineProtocol({ prefabs: { Mixed } })).toThrow(/localComponents/);
   });
 
   it("rejects invalid component and prefab ids", () => {

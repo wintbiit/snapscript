@@ -89,6 +89,7 @@ export function defineProtocol<
 
   for (const [key, component] of Object.entries(components)) {
     assertComponentSchema(component, `components.${key}`);
+    assertReplicatedComponent(component, `components.${key}`);
     registry.registerComponent(component);
     registeredComponents.set(component.schemaId, component);
   }
@@ -96,6 +97,7 @@ export function defineProtocol<
   for (const [key, prefab] of Object.entries(prefabs)) {
     assertPrefabDefinition(prefab, `prefabs.${key}`);
     for (const component of prefab.componentList) {
+      assertReplicatedComponent(component, `prefabs.${key}`);
       registry.registerComponent(component);
       registeredComponents.set(component.schemaId, component);
     }
@@ -190,6 +192,12 @@ function cloneProtocolMap<TMap extends Record<string, unknown>>(
   return Object.freeze({ ...value }) as TMap;
 }
 
+function assertReplicatedComponent(component: ComponentSchema, label: string): void {
+  if (component.replicated !== true) {
+    throw new Error(`defineProtocol() ${label} must be replicated; pass non-replicated components via localComponents`);
+  }
+}
+
 function assertComponentSchema(value: unknown, label: string): asserts value is ComponentSchema {
   if (
     value === null ||
@@ -197,6 +205,7 @@ function assertComponentSchema(value: unknown, label: string): asserts value is 
     (value as { readonly kind?: unknown }).kind !== "component" ||
     typeof (value as { readonly name?: unknown }).name !== "string" ||
     !Number.isSafeInteger((value as { readonly schemaId?: unknown }).schemaId) ||
+    typeof (value as { readonly replicated?: unknown }).replicated !== "boolean" ||
     (value as { readonly fields?: unknown }).fields === null ||
     typeof (value as { readonly fields?: unknown }).fields !== "object" ||
     !Array.isArray((value as { readonly fieldList?: unknown }).fieldList)

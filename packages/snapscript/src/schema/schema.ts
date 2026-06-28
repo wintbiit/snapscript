@@ -22,9 +22,9 @@ const MAX_FIELDS_PER_SCHEMA = 32;
 const schemasById = new Map<number, ComponentSchema>();
 
 export type SimpleEntityDefinition<TFields extends FieldDefinitions> = PrefabDefinition<{
-  readonly state: ComponentSchema<TFields>;
+  readonly state: ComponentSchema<TFields, true>;
 }> & {
-  readonly component: ComponentSchema<TFields>;
+  readonly component: ComponentSchema<TFields, true>;
 };
 
 function isComponentSchema(value: unknown): value is ComponentSchema {
@@ -78,8 +78,23 @@ export function defineEntity(
 export function defineComponent<TFields extends FieldDefinitions>(
   name: string,
   fields: TFields,
+  options: EntityOptions & { readonly replicated: false },
+): ComponentSchema<TFields, false>;
+export function defineComponent<TFields extends FieldDefinitions>(
+  name: string,
+  fields: TFields,
+  options?: EntityOptions & { readonly replicated?: true },
+): ComponentSchema<TFields, true>;
+export function defineComponent<TFields extends FieldDefinitions>(
+  name: string,
+  fields: TFields,
   options?: EntityOptions,
-): ComponentSchema<TFields> {
+): ComponentSchema<TFields, boolean>;
+export function defineComponent<TFields extends FieldDefinitions>(
+  name: string,
+  fields: TFields,
+  options?: EntityOptions,
+): ComponentSchema<TFields, boolean> {
   assertDefinitionName("Component", name);
   assertDefinitionBody("Component", name, fields);
   assertEntityOptions("Component", name, options);
@@ -92,6 +107,7 @@ export function defineComponent<TFields extends FieldDefinitions>(
   }
 
   const schemaId = idOrStableHash("Component", name, options?.id, `component:${name}`);
+  const replicated = options?.replicated ?? true;
 
   const schemaFields: Record<string, InternalSchemaField<unknown>> = {};
   const fieldList: InternalSchemaField<unknown>[] = [];
@@ -138,6 +154,7 @@ export function defineComponent<TFields extends FieldDefinitions>(
     kind: "component" as const,
     name,
     schemaId,
+    replicated,
     fields: frozenFields,
     fieldList: frozenFieldList,
     fieldCount: entries.length,
@@ -198,6 +215,9 @@ function assertEntityOptions(
   assertPlainObjectMap(`${kind} "${name}" options`, options);
   if (options.fieldIds !== undefined) {
     assertPlainObjectMap(`${kind} "${name}" fieldIds`, options.fieldIds);
+  }
+  if (options.replicated !== undefined && typeof options.replicated !== "boolean") {
+    throw new Error(`${kind} "${name}" replicated must be a boolean`);
   }
   if (options.metadata !== undefined) {
     assertPlainObjectMap(`${kind} "${name}" metadata`, options.metadata);
