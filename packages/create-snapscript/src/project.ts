@@ -173,12 +173,12 @@ const packageJsonTemplate = `<%~ JSON.stringify({
     build: "pnpm snap:generate && pnpm typecheck && pnpm test",
   },
   dependencies: {
-    snapscript: "^0.1.0",
+    snapscript: "^0.2.0",
   },
   devDependencies: {
-    "snapscript-cli": "^0.1.0",
+    "snapscript-cli": "^0.2.0",
     typescript: "^5.9.3",
-    vitest: "^4.0.8",
+    vitest: "^4.1.9",
   },
   exports: {
     ".": "./src/index.ts",
@@ -323,7 +323,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
     position: { x: 0, y: 0 },
     health: { hp: 100 },
   });
-  world.setOwner(player, 0);
 
   registerServerRpc(world);
   registerServerSystems(world);
