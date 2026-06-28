@@ -12,6 +12,7 @@ import type {
   ClientTransport,
   Clock,
   PeerRef,
+  ReadonlyEntityRef,
   ReplicatedStateReader,
   ServerTransport,
   ServerWorld,
@@ -292,7 +293,7 @@ function readClientSnapshot(world: ClientWorld): ClientSnapshot {
   return {
     myPeerId: world.myPeerId(),
     match: readMatch(world),
-    players: readPlayers(world, (id) => world.isMine(id)),
+    players: readPlayers(world, (entity) => world.isMine(entity)),
   };
 }
 
@@ -308,7 +309,7 @@ function readMatch(world: ReplicatedStateReader): MatchView | undefined {
 
 function readPlayers(
   world: ReplicatedStateReader,
-  isMine: (entityId: number) => boolean,
+  isMine: (entity: ReadonlyEntityRef) => boolean,
 ): PlayerView[] {
   const players: PlayerView[] = [];
   world.each([Position, Health] as const, (entity, position, health) => {
@@ -318,7 +319,7 @@ function readPlayers(
       x: position.x.value,
       y: position.y.value,
       hidden: position.hidden.value,
-      mine: isMine(entity.id),
+      mine: isMine(entity),
     });
   });
   return players;

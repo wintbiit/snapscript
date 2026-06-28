@@ -29,9 +29,9 @@ describe("protocol core", () => {
     server.tick();
     client.tick();
 
-    const position = client.get(1, Position);
+    const position = client.get(playerEntity, Position);
     expect(client.myPeerId()).toBe(1);
-    expect(client.isMine(1)).toBe(true);
+    expect(client.isMine(playerEntity)).toBe(true);
     expect(position?.x.value).toBe(1);
     expect(position?.y.value).toBe(0);
   });

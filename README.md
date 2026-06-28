@@ -248,10 +248,10 @@ SnapScript uses channels as policy:
 SnapScript does not implement WebSocket, WebRTC, UDP, Steam networking, prediction, rollback,
 matchmaking, accounts, or deployment.
 
-## Direct Runtime API
+## Manual Protocol API
 
-Most projects should use `.snap` generation. Handwritten protocols can use the lower-level runtime
-API directly:
+Most projects should use `.snap` generation. Small integrations and focused examples can also write
+the protocol in TypeScript with `defineProtocol()` and the same public world API:
 
 ```ts
 import {
@@ -293,6 +293,11 @@ clientWorld.sendCommand(WorldEntity, StartGame, {});
 Generated projects should prefer `commands.*`, `events.*`, `streams.*`, and `entities.*`. The package
 root intentionally does not export packet codecs, binary readers/writers, storage classes, low-level
 sync runtimes, or public world constructors.
+
+Public world methods accept entity refs such as `WorldEntity`, `ctx.source`, `ctx.target`, query
+results, or generated `entities.*` results. They do not accept numeric entity ids as entity inputs.
+Numeric ids may still appear inside your own payload fields when your protocol explicitly declares
+them, but those ids should be resolved to entity refs before calling world APIs.
 
 ## Documentation
 

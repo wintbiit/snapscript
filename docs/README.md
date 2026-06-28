@@ -39,5 +39,5 @@ Generated `.snap` projects should use:
 
 - Keep `README.md` short enough to evaluate the project quickly.
 - Keep generated-project examples facade-first.
-- Keep raw runtime API examples explicit and separate from generated-project examples.
+- Keep handwritten protocol examples explicit and separate from generated-project examples.
 - Do not document internal packet codecs, storage classes, or low-level sync runtimes as public API.

@@ -49,7 +49,7 @@ describe("registry and rpc packets", () => {
 
     applySnapshot(b, encodeFullSnapshot(a, 1), registry);
 
-    expect(b.get(player.id, Player.component)?.hp.value).toBe(25);
+    expect(b.get(player, Player.component)?.hp.value).toBe(25);
   });
 
   it("round-trips rpc payloads through field codecs", () => {

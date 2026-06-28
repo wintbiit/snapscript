@@ -322,6 +322,16 @@ if (false) {
   // @ts-expect-error getComponent only accepts component schemas
   host.getComponent(Actor);
   host.remove(actor, Actor);
+  // @ts-expect-error public world APIs require entity refs, not numeric entity ids
+  host.get(actor.id, Position);
+  // @ts-expect-error public world APIs require entity refs, not numeric entity ids
+  host.add(actor.id, Position);
+  // @ts-expect-error ownership APIs use PeerEntity refs, not numeric peer ids
+  host.setOwner(actor, 1);
+  // @ts-expect-error client world APIs require entity refs, not numeric entity ids
+  client.get(actor.id, Position);
+  // @ts-expect-error command targets are entity refs, not numeric entity ids
+  client.sendCommand(WorldEntity.id, Command);
   const clientActorParts = client.getPrefab(actor, Actor)!;
   const typedClientActorParts: ReadonlyPrefabInstanceOf<typeof Actor> = clientActorParts;
   typedClientActorParts.position.x.value.toFixed();
@@ -354,7 +364,7 @@ if (false) {
   // @ts-expect-error protocol registry is internal implementation detail
   protocol.registry;
   // @ts-expect-error field meta codec is internal
-  host.get(1, Position)!.x.meta.codec;
+  host.get(actor, Position)!.x.meta.codec;
   // @ts-expect-error internal sync hooks are not public world API
   host._getDirtySnapshot();
   // @ts-expect-error internal remote apply hooks are not public world API

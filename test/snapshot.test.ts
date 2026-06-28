@@ -37,8 +37,8 @@ describe("snapshot sync", () => {
 
     applySnapshot(b, encodeDirty(a, 1), registry);
 
-    expect(b.get(player.id, PlayerState)?.hp.value).toBe(80);
-    expect(b.get(player.id, PlayerState)?.dead.value).toBe(false);
+    expect(b.get(player, PlayerState)?.hp.value).toBe(80);
+    expect(b.get(player, PlayerState)?.dead.value).toBe(false);
   });
 
   it("omits field masks for create and destroy ops", () => {
@@ -62,7 +62,7 @@ describe("snapshot sync", () => {
     expect(createReader.readU16()).toBe(77);
     expect(createReader.remaining()).toBe(0);
 
-    world.destroy(player.id);
+    world.destroy(player);
     const destroyReader = new BitReader(encodeDirty(world, 2));
     expect(destroyReader.readU8()).toBe(1);
     expect(destroyReader.readU32()).toBe(2);
@@ -89,8 +89,8 @@ describe("snapshot sync", () => {
     a.get(player, PlayerState)!.hp.value = 50;
     applySnapshot(b, encodeDirty(a, 2), registry);
 
-    expect(b.get(player.id, PlayerState)?.hp.value).toBe(50);
-    expect(b.get(player.id, PlayerState)?.dead.value).toBe(false);
+    expect(b.get(player, PlayerState)?.hp.value).toBe(50);
+    expect(b.get(player, PlayerState)?.dead.value).toBe(false);
   });
 
   it("keeps update ops before removals and destroys in default snapshots", () => {
@@ -151,8 +151,8 @@ describe("snapshot sync", () => {
 
     applySnapshot(b, bytes, registry);
 
-    expect(b.get(first.id, PlayerState)?.hp.value).toBe(50);
-    expect(b.get(second.id, PlayerState)?.hp.value).toBe(75);
+    expect(b.get(first, PlayerState)?.hp.value).toBe(50);
+    expect(b.get(second, PlayerState)?.hp.value).toBe(75);
     expect(encodeDirty(a, 3)).toEqual(new Uint8Array([1, 3, 0, 0, 0, 0]));
   });
 
@@ -201,9 +201,9 @@ describe("snapshot sync", () => {
 
     applySnapshot(b, encodeFullSnapshot(a, 10), registry);
 
-    expect(b.get(player.id, PlayerState)?.hp.value).toBe(40);
+    expect(b.get(player, PlayerState)?.hp.value).toBe(40);
     expect(applySnapshot(b, encodeDirty(a, 11), registry)).toBe(11);
-    expect(b.get(player.id, PlayerState)?.hp.value).toBe(40);
+    expect(b.get(player, PlayerState)?.hp.value).toBe(40);
   });
 
   it("applies destroy snapshots", () => {
@@ -218,10 +218,10 @@ describe("snapshot sync", () => {
     const player = a.spawn(Player);
 
     applySnapshot(b, encodeDirty(a, 1), registry);
-    a.destroy(player.id);
+    a.destroy(player);
     applySnapshot(b, encodeDirty(a, 2), registry);
 
-    expect(b.get(player.id, PlayerState)).toBeUndefined();
+    expect(b.get(player, PlayerState)).toBeUndefined();
   });
 
   it("keeps remote apply from marking local dirty", () => {
@@ -257,14 +257,14 @@ describe("snapshot sync", () => {
 
     applySnapshot(b, encodeDirty(a, 1), registry);
     a.get(first, PlayerState)!.hp.value = 90;
-    a.destroy(second.id);
+    a.destroy(second);
     const third = a.spawn(Player, { hp: 30 });
 
     applySnapshot(b, encodeDirty(a, 2), registry);
 
-    expect(b.get(first.id, PlayerState)?.hp.value).toBe(90);
-    expect(b.get(second.id, PlayerState)).toBeUndefined();
-    expect(b.get(third.id, PlayerState)?.hp.value).toBe(30);
+    expect(b.get(first, PlayerState)?.hp.value).toBe(90);
+    expect(b.get(second, PlayerState)).toBeUndefined();
+    expect(b.get(third, PlayerState)?.hp.value).toBe(30);
   });
 
   it("does not clear dirty updates when encoding fails", () => {

@@ -34,7 +34,7 @@ describe("node protocol platform", () => {
     client.tick();
 
     expect(client.myPeerId()).toBe(1);
-    expect(client.get(1, Position)?.x.value).toBe(1);
+    expect(client.get(playerEntity, Position)?.x.value).toBe(1);
   });
 });
 

@@ -16,6 +16,7 @@ import {
   type ChannelName,
   type ClientTransport,
   type Clock,
+  type EntityRef,
   type ServerTransport,
   type PeerRef,
 } from "../packages/snapscript/src/index";
@@ -260,7 +261,7 @@ describe("single world sync api", () => {
     host.tick();
     client.tick();
 
-    expect(client.get(player.id, PlayerState)?.hp.value).toBe(77);
+    expect(client.get(player, PlayerState)?.hp.value).toBe(77);
   });
 
   it("fails fast when server transport peers are invalid", () => {
@@ -407,20 +408,20 @@ describe("single world sync api", () => {
     const client = createClientWorld({ protocol, transport: clientTransport, clock: clock() });
     const entity = host.spawn();
 
-    expect(() => host.add({} as never, Position)).toThrow(/requires an entity id or entity ref/);
-    expect(() => host.add(999, Position)).toThrow(/requires an existing entity/);
-    expect(() => host.add(999, MissingEntityPrefab)).toThrow(/requires an existing entity/);
+    expect(() => host.add({} as never, Position)).toThrow(/requires an entity ref/);
+    expect(() => host.add(999 as never, Position)).toThrow(/requires an entity ref/);
+    expect(() => host.add({ id: 999 } as never, MissingEntityPrefab)).toThrow(/requires an existing entity/);
     expect(host.destroy(entity)).toBe(true);
     expect(() => host.add(entity, Position)).toThrow(/requires an existing entity/);
-    expect(() => host.get(null as never, Position)).toThrow(/requires an entity id or entity ref/);
+    expect(() => host.get(null as never, Position)).toThrow(/requires an entity ref/);
     expect(() => client.get({ id: "1" } as never, Position)).toThrow(
-      /requires an entity id or entity ref/,
+      /requires an entity ref/,
     );
     expect(() => host.remove({ id: -1 } as never, Position)).toThrow(
       /requires a non-negative integer entity id/,
     );
     expect(() => host.destroy(Number.NaN as never)).toThrow(
-      /requires a non-negative integer entity id/,
+      /requires an entity ref/,
     );
     expect(() => host.setVisible(1, { id: 1.5 } as never, true)).toThrow(
       /requires a non-negative integer entity id/,
@@ -430,11 +431,11 @@ describe("single world sync api", () => {
     );
     expect(() => host.setVisible(null as never, entity, true)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.clearVisible(1, -1 as never)).toThrow(
-      /requires a non-negative integer entity id/,
+      /requires an entity ref/,
     );
     expect(() => host.clearVisible(undefined as never)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.isVisible(1, {} as never)).toThrow(
-      /requires an entity id or entity ref/,
+      /requires an entity ref/,
     );
     expect(() => host.isVisible(Number.NaN as never, entity)).toThrow(/requires a non-negative integer peer id/);
     expect(() => host.sendFullSnapshot(Number.NaN as never)).toThrow(/requires a peer ref/);
@@ -449,20 +450,21 @@ describe("single world sync api", () => {
     const host = createServerWorld({ protocol, transport: serverTransport, clock: clock() });
     const first = host.spawn(Player);
     const second = host.spawn(Player);
+    const peer = (host as unknown as { _ensurePeerEntity(peerId: number): EntityRef })._ensurePeerEntity(1);
 
     expect(host.ownerOf(first)).toBe(0);
-    expect(host.isOwner(0, first)).toBe(true);
+    expect(host.isOwner(peer, first)).toBe(false);
 
-    host.setOwner(first, 1);
-    host.setOwner(second, 1);
+    host.setOwner(first, peer);
+    host.setOwner(second, peer);
     expect(host.ownerOf(first)).toBe(1);
-    expect(host.isOwner(1, first)).toBe(true);
-    expect(host.ownedBy(1).map((entity) => entity.id)).toEqual([first.id, second.id]);
+    expect(host.isOwner(peer, first)).toBe(true);
+    expect(host.ownedBy(peer).map((entity) => entity.id)).toEqual([first.id, second.id, peer.id]);
 
     host.clearOwner(first);
     expect(host.ownerOf(first)).toBe(0);
-    expect(host.ownedBy(1).map((entity) => entity.id)).toEqual([second.id]);
-    expect(() => host.setOwner(first, -1 as never)).toThrow(/requires a non-negative integer peer id/);
+    expect(host.ownedBy(peer).map((entity) => entity.id)).toEqual([second.id, peer.id]);
+    expect(() => host.setOwner(first, -1 as never)).toThrow(/requires an entity ref/);
   });
 
   it("uses WorldEntity for replicated world-level components", () => {
@@ -476,8 +478,6 @@ describe("single world sync api", () => {
     expect(WorldEntity.id).toBe(0);
     expect(host.spawn().id).toBe(1);
     expect(host.ownerOf(WorldEntity)).toBe(ServerPeerId);
-    expect(host.isOwner(ServerPeerId, WorldEntity)).toBe(true);
-    expect(host.ownedBy(ServerPeerId).map((entity) => entity.id)).toContain(WorldEntity.id);
 
     const state = host.add(WorldEntity, MatchState, { phase: 1 });
     expect(state.phase.value).toBe(1);
@@ -519,10 +519,11 @@ describe("single world sync api", () => {
       },
     });
     host.add(WorldEntity, MatchState);
+    const peer = (host as unknown as { _ensurePeerEntity(peerId: number): EntityRef })._ensurePeerEntity(1);
 
     expect(host.isVisible(1, WorldEntity)).toBe(true);
     expect(inspected).toBe(false);
-    expect(() => host.setOwner(WorldEntity, 1)).toThrow(/cannot change WorldEntity ownership/);
+    expect(() => host.setOwner(WorldEntity, peer)).toThrow(/cannot change WorldEntity ownership/);
     expect(() => host.setVisible(1, WorldEntity, false)).toThrow(/cannot hide WorldEntity/);
     expect(() => host.setVisible(1, WorldEntity, true)).not.toThrow();
     expect(() => host.clearOwner(WorldEntity)).not.toThrow();
@@ -745,13 +746,13 @@ describe("single world sync api", () => {
     client.tick();
     host.tick();
     client.tick();
-    expect(client.get(player.id, PlayerState)?.hp.value).toBe(100);
+    expect(client.get(player, PlayerState)?.hp.value).toBe(100);
 
     client.sendCommand(WorldEntity, Move, { dx: 0.5 });
     host.tick();
     client.tick();
 
-    expect(client.get(player.id, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
+    expect(client.get(player, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
     expect(eventAmount).toBe(3);
   });
 

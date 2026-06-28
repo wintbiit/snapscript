@@ -1,10 +1,10 @@
 # SnapScript API Reference
 
-Last reviewed: 2026-06-20
+Last reviewed: 2026-06-28
 
 This document defines the intended user-facing API layers. The generated facade is the normal
-project path. Lower-level world methods remain available for direct integrations, tests, and
-examples.
+project path. Handwritten protocols may use the public world RPC methods directly. Packet codecs,
+storage internals, and low-level sync runtimes are not part of the public package entrypoint.
 
 ## Generated Facade
 
@@ -74,6 +74,10 @@ const isPlayer = entities.Player.has(clientWorld, entity);
 const playerState = entities.Player.get(clientWorld, entity);
 ```
 
+Public world methods accept entity refs such as `WorldEntity`, `ctx.source`, `ctx.target`, query
+rows, and generated `entities.*` results. They do not accept numeric entity ids as entity inputs.
+If a protocol payload carries an entity id, resolve it to an entity ref before calling world APIs.
+
 ## World API
 
 Projects create worlds directly or through generated core helpers:
@@ -93,7 +97,10 @@ The stable public world layer includes ECS and lifecycle operations:
   `myPeerEntity`, `peerId`, `peerStatus`, `isMine`
 - visibility: `setVisible`, `clearVisible`
 
-Endpoint RPC facade files call lower-level world methods such as `sendCommand`, `onCommand`,
+Ownership APIs that name a peer use PeerEntity refs, not numeric peer ids. Use `world.peerId(peerEntity)`
+only when gameplay code needs to display or persist the numeric connection id.
+
+Endpoint RPC facade files call public world methods such as `sendCommand`, `onCommand`,
 `broadcastEvent`, `sendEventTo`, `broadcastPeerEvent`, `sendPeerEventTo`, `onEvent`,
 `pushCommandStream`, and `onCommandStream`. These methods remain available for direct integrations,
 but generated projects should prefer the facade.

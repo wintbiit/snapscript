@@ -400,21 +400,21 @@ export interface ReplicatedStateReader {
   ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads a single component or a simple prefab primary component as read-only replicated state. */
   get<TFields extends FieldDefinitions>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads every component in a composite prefab as read-only replicated state. */
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): ReadonlyPrefabInstance<TComponents> | undefined;
   /** Returns whether the entity currently has a component or every component in a prefab. */
   has(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
   /** Returns the synchronized owner peer id for an entity. Server-owned entities return `0`. */
-  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
+  ownerOf(entity: ReadonlyEntityRef): PeerId;
   /** Creates a lazy read-only query with `.length`, `.map()`, `.forEach()`, and `.toArray()`. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
@@ -545,17 +545,17 @@ class WorldCore implements QueryWorldAccess {
   }
 
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     component: ComponentSchema<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: SimpleEntityDefinition<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: PrefabDefinition<TComponents>,
     initial?: Partial<{
       [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
@@ -564,7 +564,7 @@ class WorldCore implements QueryWorldAccess {
     }>,
   ): PrefabInstance<TComponents>;
   add(
-    entity: number | EntityRef,
+    entity: EntityRef,
     componentOrPrefab: ComponentSchema | PrefabDefinition,
     initial?: Record<string, unknown>,
   ): ComponentInstance<FieldDefinitions> | PrefabInstance<Record<string, ComponentSchema>> {
@@ -1641,17 +1641,17 @@ export interface ServerWorld {
   ): EntityRef;
   /** Adds a component or prefab to an existing server entity. Re-adding an existing component returns it. */
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     component: ComponentSchema<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: SimpleEntityDefinition<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: PrefabDefinition<TComponents>,
     initial?: Partial<{
       [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
@@ -1665,37 +1665,37 @@ export interface ServerWorld {
   ): ComponentInstance<TFields> | undefined;
   /** Reads a component or simple prefab primary component from an entity. */
   get<TFields extends FieldDefinitions>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ComponentInstance<TFields> | undefined;
   /** Reads every component in a composite prefab, or `undefined` if any component is missing. */
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): PrefabInstance<TComponents> | undefined;
   /** Returns whether an entity currently has a component or every component in a prefab. */
   has(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
   /** Returns the owner peer id for an entity. Server-owned entities return `0`. */
-  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
-  /** Sets server-authoritative owner metadata for an entity. */
-  setOwner(entity: number | EntityRef, peer: PeerId | ReadonlyEntityRef): void;
+  ownerOf(entity: ReadonlyEntityRef): PeerId;
+  /** Sets server-authoritative owner metadata for an entity using a PeerEntity ref. */
+  setOwner(entity: EntityRef, peer: ReadonlyEntityRef): void;
   /** Sets an entity back to server ownership. */
-  clearOwner(entity: number | EntityRef): void;
-  /** Returns whether a peer owns an entity. */
-  isOwner(peer: PeerId | ReadonlyEntityRef, entity: number | ReadonlyEntityRef): boolean;
-  /** Returns read-only refs for entities currently owned by a peer. */
-  ownedBy(peer: PeerId | ReadonlyEntityRef): readonly ReadonlyEntityRef[];
+  clearOwner(entity: EntityRef): void;
+  /** Returns whether a PeerEntity owns an entity. */
+  isOwner(peer: ReadonlyEntityRef, entity: ReadonlyEntityRef): boolean;
+  /** Returns read-only refs for entities currently owned by a PeerEntity. */
+  ownedBy(peer: ReadonlyEntityRef): readonly ReadonlyEntityRef[];
   /** Returns the numeric peer id represented by a PeerEntity ref. */
   peerId(peer: ReadonlyEntityRef): PeerId;
   /** Returns the built-in connection status for a PeerEntity ref. */
   peerStatus(peer: ReadonlyEntityRef): PeerStatusValue;
   /** Removes a component or every component in a prefab from an entity. */
-  remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean;
+  remove(entity: EntityRef, componentOrPrefab: ComponentOrPrefab): boolean;
   /** Destroys an entity and all component rows attached to it. */
-  destroy(entity: number | EntityRef): boolean;
+  destroy(entity: EntityRef): boolean;
   /** Creates a lazy query over one or more components. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
@@ -1723,20 +1723,20 @@ export interface ServerWorld {
   ): () => void;
   /** Broadcasts an endpoint-addressed event to every connected peer. */
   broadcastEvent<TFields extends FieldDefinitions>(
-    source: number | ReadonlyEntityRef,
+    source: ReadonlyEntityRef,
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
   /** Sends an endpoint-addressed event to one or more PeerEntity refs. */
   sendEventTo<TFields extends FieldDefinitions>(
-    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
-    source: number | ReadonlyEntityRef,
+    targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    source: ReadonlyEntityRef,
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
   /** Sends a peer endpoint event whose source is each receiving PeerEntity. */
   sendPeerEventTo<TFields extends FieldDefinitions>(
-    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[],
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
@@ -1748,11 +1748,11 @@ export interface ServerWorld {
   /** Sends a full snapshot to one peer or all known peers. */
   sendFullSnapshot(peer?: PeerRef): void;
   /** Sets a manual per-peer visibility override for one entity. */
-  setVisible(peerId: PeerId, entity: number | ReadonlyEntityRef, visible: boolean): void;
+  setVisible(peerId: PeerId, entity: ReadonlyEntityRef, visible: boolean): void;
   /** Clears one visibility override, or all overrides for a peer when no entity is passed. */
-  clearVisible(peerId: PeerId, entity?: number | ReadonlyEntityRef): void;
+  clearVisible(peerId: PeerId, entity?: ReadonlyEntityRef): void;
   /** Evaluates the current visibility policy for a peer/entity pair. */
-  isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean;
+  isVisible(peerId: PeerId, entity: ReadonlyEntityRef): boolean;
 }
 
 class ServerWorldImpl implements ServerWorld {
@@ -1817,17 +1817,17 @@ class ServerWorldImpl implements ServerWorld {
   }
 
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     component: ComponentSchema<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TFields extends FieldDefinitions>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: SimpleEntityDefinition<TFields>,
     initial?: Partial<FieldValues<TFields>>,
   ): ComponentInstance<TFields>;
   add<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | EntityRef,
+    entity: EntityRef,
     prefab: PrefabDefinition<TComponents>,
     initial?: Partial<{
       [K in keyof TComponents]: TComponents[K] extends ComponentSchema<infer TFields>
@@ -1836,10 +1836,11 @@ class ServerWorldImpl implements ServerWorld {
     }>,
   ): PrefabInstance<TComponents>;
   add(
-    entity: number | EntityRef,
+    entity: EntityRef,
     componentOrPrefab: ComponentSchema | PrefabDefinition,
     initial?: Record<string, unknown>,
   ): ComponentInstance<FieldDefinitions> | PrefabInstance<Record<string, ComponentSchema>> {
+    entityIdFromRef(entity, "ServerWorld.add()");
     if (hasComponentList(componentOrPrefab)) {
       return this.#core.add(
         entity,
@@ -1851,13 +1852,14 @@ class ServerWorldImpl implements ServerWorld {
   }
 
   get<TFields extends FieldDefinitions>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ComponentInstance<TFields> | undefined;
   get(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
   ): ComponentInstance<FieldDefinitions> | undefined {
+    entityIdFromRef(entity, "ServerWorld.get()");
     return this.#core.getAny(entity, componentOrPrefab);
   }
 
@@ -1868,36 +1870,46 @@ class ServerWorldImpl implements ServerWorld {
   }
 
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): PrefabInstance<TComponents> | undefined {
+    entityIdFromRef(entity, "ServerWorld.getPrefab()");
     return this.#core.getPrefab(entity, prefab);
   }
 
   has(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean {
+    entityIdFromRef(entity, "ServerWorld.has()");
     return this.#core.has(entity, componentOrPrefab);
   }
 
-  ownerOf(entity: number | ReadonlyEntityRef): PeerId {
+  ownerOf(entity: ReadonlyEntityRef): PeerId {
+    entityIdFromRef(entity, "ServerWorld.ownerOf()");
     return this.#core.ownerOf(entity);
   }
 
-  setOwner(entity: number | EntityRef, peer: PeerId | ReadonlyEntityRef): void {
+  setOwner(entity: EntityRef, peer: ReadonlyEntityRef): void {
+    entityIdFromRef(entity, "ServerWorld.setOwner()");
+    entityIdFromRef(peer, "ServerWorld.setOwner()");
+    this.#core.peerId(peer);
     this.#core.setOwner(entity, peer);
   }
 
-  clearOwner(entity: number | EntityRef): void {
+  clearOwner(entity: EntityRef): void {
+    entityIdFromRef(entity, "ServerWorld.clearOwner()");
     this.#core.clearOwner(entity);
   }
 
-  isOwner(peer: PeerId | ReadonlyEntityRef, entity: number | ReadonlyEntityRef): boolean {
+  isOwner(peer: ReadonlyEntityRef, entity: ReadonlyEntityRef): boolean {
+    this.#core.peerId(peer);
+    entityIdFromRef(entity, "ServerWorld.isOwner()");
     return this.#core.isOwner(peer, entity);
   }
 
-  ownedBy(peer: PeerId | ReadonlyEntityRef): readonly ReadonlyEntityRef[] {
+  ownedBy(peer: ReadonlyEntityRef): readonly ReadonlyEntityRef[] {
+    this.#core.peerId(peer);
     return this.#core.ownedBy(peer);
   }
 
@@ -1917,11 +1929,13 @@ class ServerWorldImpl implements ServerWorld {
     this.#core.markPeerDisconnected(peerId);
   }
 
-  remove(entity: number | EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
+  remove(entity: EntityRef, componentOrPrefab: ComponentOrPrefab): boolean {
+    entityIdFromRef(entity, "ServerWorld.remove()");
     return this.#core.remove(entity, componentOrPrefab);
   }
 
-  destroy(entity: number | EntityRef): boolean {
+  destroy(entity: EntityRef): boolean {
+    entityIdFromRef(entity, "ServerWorld.destroy()");
     return this.#core.destroy(entity);
   }
 
@@ -2001,29 +2015,29 @@ class ServerWorldImpl implements ServerWorld {
   }
 
   broadcastEvent<TFields extends FieldDefinitions>(
-    source: number | ReadonlyEntityRef,
+    source: ReadonlyEntityRef,
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
-    const sourceId = entityIdFrom(source, "ServerWorld.broadcastEvent()");
+    const sourceId = entityIdFromRef(source, "ServerWorld.broadcastEvent()");
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.broadcastEvent");
     this.#runtime.broadcastEvent(sourceId, rpc, payload);
   }
 
   sendEventTo<TFields extends FieldDefinitions>(
-    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
-    source: number | ReadonlyEntityRef,
+    targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    source: ReadonlyEntityRef,
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
     const peerTargets = peerEventTargets(this.#core, targets, "ServerWorld.sendEventTo()");
-    const sourceId = entityIdFrom(source, "ServerWorld.sendEventTo()");
+    const sourceId = entityIdFromRef(source, "ServerWorld.sendEventTo()");
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "event", "ServerWorld.sendEventTo");
     this.#runtime.sendEventTo(peerTargets, sourceId, rpc, payload);
   }
 
   sendPeerEventTo<TFields extends FieldDefinitions>(
-    targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+    targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[],
     rpc: EventDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
@@ -2047,9 +2061,9 @@ class ServerWorldImpl implements ServerWorld {
     this.#runtime.sendFullSnapshot(peer);
   }
 
-  setVisible(peerId: PeerId, entity: number | ReadonlyEntityRef, visible: boolean): void {
+  setVisible(peerId: PeerId, entity: ReadonlyEntityRef, visible: boolean): void {
     assertPeerId(peerId, "ServerWorld.setVisible()");
-    const entityId = entityIdFrom(entity, "ServerWorld.setVisible()");
+    const entityId = entityIdFromRef(entity, "ServerWorld.setVisible()");
     if (typeof visible !== "boolean") {
       throw new Error("ServerWorld.setVisible() visible must be a boolean");
     }
@@ -2064,14 +2078,14 @@ class ServerWorldImpl implements ServerWorld {
     this.#visibility.set(peerId, map);
   }
 
-  clearVisible(peerId: PeerId, entity?: number | ReadonlyEntityRef): void {
+  clearVisible(peerId: PeerId, entity?: ReadonlyEntityRef): void {
     assertPeerId(peerId, "ServerWorld.clearVisible()");
     if (entity === undefined) {
       this.#visibility.delete(peerId);
       return;
     }
 
-    const entityId = entityIdFrom(entity, "ServerWorld.clearVisible()");
+    const entityId = entityIdFromRef(entity, "ServerWorld.clearVisible()");
     if (entityId === WorldEntity.id) {
       return;
     }
@@ -2085,9 +2099,15 @@ class ServerWorldImpl implements ServerWorld {
     }
   }
 
-  isVisible(peerId: PeerId, entity: number | ReadonlyEntityRef): boolean {
+  isVisible(peerId: PeerId, entity: ReadonlyEntityRef): boolean {
     assertPeerId(peerId, "ServerWorld.isVisible()");
-    const entityId = entityIdFrom(entity, "ServerWorld.isVisible()");
+    const entityId = entityIdFromRef(entity, "ServerWorld.isVisible()");
+    return this._isVisibleById(peerId, entityId);
+  }
+
+  _isVisibleById(peerId: PeerId, entityId: number): boolean {
+    assertPeerId(peerId, "ServerWorld.isVisible()");
+    assertEntityId(entityId, "ServerWorld.isVisible()");
     if (entityId === WorldEntity.id) {
       return true;
     }
@@ -2150,21 +2170,21 @@ export interface ClientWorld {
   ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads a replicated component or simple prefab primary component. */
   get<TFields extends FieldDefinitions>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
   /** Reads every component in a composite prefab as read-only replicated state. */
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): ReadonlyPrefabInstance<TComponents> | undefined;
   /** Returns whether a replicated entity currently has a component or prefab. */
   has(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean;
   /** Returns the synchronized owner peer id for an entity. Server-owned entities return `0`. */
-  ownerOf(entity: number | ReadonlyEntityRef): PeerId;
+  ownerOf(entity: ReadonlyEntityRef): PeerId;
   /** Returns this client's assigned peer id, or `0` before assignment. */
   myPeerId(): PeerId;
   /** Returns this client's PeerEntity ref. */
@@ -2174,7 +2194,7 @@ export interface ClientWorld {
   /** Returns the built-in connection status for a PeerEntity ref. */
   peerStatus(peer: ReadonlyEntityRef): PeerStatusValue;
   /** Returns whether this client owns an entity. */
-  isMine(entity: number | ReadonlyEntityRef): boolean;
+  isMine(entity: ReadonlyEntityRef): boolean;
   /** Creates a lazy read-only query over one or more components. */
   query<TComponents extends ComponentQuery>(
     ...components: TComponents
@@ -2190,13 +2210,13 @@ export interface ClientWorld {
   tick(): void;
   /** Sends an endpoint-addressed client-to-server command. */
   sendCommand<TFields extends FieldDefinitions>(
-    target: number | ReadonlyEntityRef,
+    target: ReadonlyEntityRef,
     rpc: CommandDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void;
   /** Pushes one sample into a client-to-server command stream. */
   pushCommandStream<TFields extends FieldDefinitions>(
-    target: number | ReadonlyEntityRef,
+    target: ReadonlyEntityRef,
     stream: StreamDefinition<TFields>,
     payload: Partial<FieldValues<TFields>>,
     clientTick: number,
@@ -2245,13 +2265,14 @@ class ClientWorldImpl implements ClientWorld {
   }
 
   get<TFields extends FieldDefinitions>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema<TFields> | SimpleEntityDefinition<TFields>,
   ): ReadonlyComponentInstance<TFields> | undefined;
   get(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentSchema | SimpleEntityDefinition<FieldDefinitions>,
   ): ReadonlyComponentInstance<FieldDefinitions> | undefined {
+    entityIdFromRef(entity, "ClientWorld.get()");
     return this.#core.getReadonly(
       entity,
       componentOrPrefab,
@@ -2265,20 +2286,23 @@ class ClientWorldImpl implements ClientWorld {
   }
 
   getPrefab<TComponents extends Record<string, ComponentSchema>>(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     prefab: PrefabDefinition<TComponents>,
   ): ReadonlyPrefabInstance<TComponents> | undefined {
+    entityIdFromRef(entity, "ClientWorld.getPrefab()");
     return this.#core.getPrefabReadonly(entity, prefab);
   }
 
   has(
-    entity: number | ReadonlyEntityRef,
+    entity: ReadonlyEntityRef,
     componentOrPrefab: ComponentOrPrefab,
   ): boolean {
+    entityIdFromRef(entity, "ClientWorld.has()");
     return this.#core.has(entity, componentOrPrefab);
   }
 
-  ownerOf(entity: number | ReadonlyEntityRef): PeerId {
+  ownerOf(entity: ReadonlyEntityRef): PeerId {
+    entityIdFromRef(entity, "ClientWorld.ownerOf()");
     return this.#core.ownerOf(entity);
   }
 
@@ -2302,7 +2326,8 @@ class ClientWorldImpl implements ClientWorld {
     this.#core.registerPeerEntity(peerId, peerEntityId);
   }
 
-  isMine(entity: number | ReadonlyEntityRef): boolean {
+  isMine(entity: ReadonlyEntityRef): boolean {
+    entityIdFromRef(entity, "ClientWorld.isMine()");
     return this.ownerOf(entity) === this.myPeerId();
   }
 
@@ -2347,24 +2372,24 @@ class ClientWorldImpl implements ClientWorld {
   }
 
   sendCommand<TFields extends FieldDefinitions>(
-    target: number | ReadonlyEntityRef,
+    target: ReadonlyEntityRef,
     rpc: CommandDefinition<TFields>,
     payload?: Partial<FieldValues<TFields>>,
   ): void {
-    const targetId = entityIdFrom(target, "ClientWorld.sendCommand()");
+    const targetId = entityIdFromRef(target, "ClientWorld.sendCommand()");
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, rpc, "command", "ClientWorld.sendCommand");
     this.#assignedPeerEntity("ClientWorld.sendCommand()");
     this.#runtime.sendCommand(targetId, rpc, payload);
   }
 
   pushCommandStream<TFields extends FieldDefinitions>(
-    target: number | ReadonlyEntityRef,
+    target: ReadonlyEntityRef,
     stream: StreamDefinition<TFields>,
     payload: Partial<FieldValues<TFields>>,
     clientTick: number,
     dtMs: number,
   ): void {
-    const targetId = entityIdFrom(target, "ClientWorld.pushCommandStream()");
+    const targetId = entityIdFromRef(target, "ClientWorld.pushCommandStream()");
     assertProtocolRpc(this.#protocol, this.#knownProtocolRpcs, stream, "stream", "ClientWorld.pushCommandStream");
     this.#assignedPeerEntity("ClientWorld.pushCommandStream()");
     assertStreamSampleNumber(clientTick, "clientTick");
@@ -2464,7 +2489,7 @@ function serverRuntimeOptions(
     registry: registryFromOptions(options),
     ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
-    isVisible: (peer, entityId) => world.isVisible(peer, entityId),
+    isVisible: (peer, entityId) => (world as ServerWorldImpl)._isVisibleById(peer, entityId),
     canReusePeerSnapshots,
     ensurePeerEntity: (peerId) => (world as ServerWorldImpl)._ensurePeerEntity(peerId).id,
     markPeerDisconnected: (peerId) => (world as ServerWorldImpl)._markPeerDisconnected(peerId),
@@ -2764,6 +2789,21 @@ function entityIdFrom(entity: number | ReadonlyEntityRef, label: string): number
   return entityId;
 }
 
+function entityIdFromRef(entity: ReadonlyEntityRef, label: string): number {
+  if (typeof entity === "number") {
+    throw new Error(`${label} requires an entity ref`);
+  }
+  if (entity === null || typeof entity !== "object" || !("id" in entity)) {
+    throw new Error(`${label} requires an entity ref`);
+  }
+  const entityId = (entity as { readonly id?: unknown }).id;
+  if (typeof entityId !== "number") {
+    throw new Error(`${label} requires an entity ref`);
+  }
+  assertEntityId(entityId, label);
+  return entityId;
+}
+
 function assertEntityId(entityId: number, label: string): void {
   if (!Number.isSafeInteger(entityId) || entityId < 0) {
     throw new Error(`${label} requires a non-negative integer entity id`);
@@ -2772,26 +2812,23 @@ function assertEntityId(entityId: number, label: string): void {
 
 function peerEventTargets(
   core: WorldCore,
-  targets: number | ReadonlyEntityRef | readonly ReadonlyEntityRef[],
+  targets: ReadonlyEntityRef | readonly ReadonlyEntityRef[],
   label: string,
 ):
   | { readonly peerId: PeerId; readonly peerEntityId: number }
   | readonly { readonly peerId: PeerId; readonly peerEntityId: number }[] {
-  if (typeof targets !== "number" && Array.isArray(targets)) {
+  if (Array.isArray(targets)) {
     return targets.map((target) => peerEventTarget(core, target, label));
   }
-  return peerEventTarget(core, targets as number | ReadonlyEntityRef, label);
+  return peerEventTarget(core, targets as ReadonlyEntityRef, label);
 }
 
 function peerEventTarget(
   core: WorldCore,
-  target: number | ReadonlyEntityRef,
+  target: ReadonlyEntityRef,
   label: string,
 ): { readonly peerId: PeerId; readonly peerEntityId: number } {
-  if (typeof target === "number") {
-    return { peerId: peerIdFrom(target, label), peerEntityId: core.peerEntity(target)?.id ?? target };
-  }
-  return { peerId: core.peerId(target), peerEntityId: entityIdFrom(target, label) };
+  return { peerId: core.peerId(target), peerEntityId: entityIdFromRef(target, label) };
 }
 
 function assertPeerRef(peer: unknown, label: string): asserts peer is PeerRef {

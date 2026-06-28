@@ -114,7 +114,7 @@ describe("world and NetRef", () => {
     state.hp.value = 80;
     applySnapshot(b, encodeDirty(a, 2), registry);
 
-    expect(b.get(player.id, PlayerState)?.hp.value).toBe(80);
+    expect(b.get(player, PlayerState)?.hp.value).toBe(80);
     expect(worldInternals(b).getDirtyMask(player.id)).toBe(0);
   });
 });

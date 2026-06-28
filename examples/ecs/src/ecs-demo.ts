@@ -297,15 +297,17 @@ export class ServerDemo {
 
     this.world.onCommand(DamageCommand, (ctx) => {
       const payload = ctx.payload;
-      const target = this.world.get(payload.target || this.player.id, Health);
+      const targetId = payload.target || this.player.id;
+      const targetRef = this.world.query(Health).map(([entity]) => entity).find((entity) => entity.id === targetId);
+      const target = targetRef === undefined ? undefined : this.world.get(targetRef, Health);
       if (target === undefined) {
         return;
       }
       target.hp.value = Math.max(0, target.hp.value - payload.amount);
       target.dead.value = target.hp.value <= 0;
-      this.#lastEvent = `damage ${payload.amount} on #${payload.target || this.player.id}`;
+      this.#lastEvent = `damage ${payload.amount} on #${targetId}`;
       this.world.broadcastEvent(WorldEntity, DamageEvent, {
-        entityId: payload.target || this.player.id,
+        entityId: targetId,
         amount: payload.amount,
       });
     });

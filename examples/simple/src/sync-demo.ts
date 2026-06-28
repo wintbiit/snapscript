@@ -301,7 +301,6 @@ export class ClientPeer {
     transport: this.#transport,
     clock: this.clock,
   });
-  #playerId = 1;
   #lastEvent: string | undefined;
 
   constructor() {
@@ -342,7 +341,8 @@ export class ClientPeer {
 
   snapshot(): PeerSnapshot {
     // Client reads are read-only views over the last applied replicated snapshot.
-    const player = this.world.get(this.#playerId, PlayerSchema);
+    const playerRef = this.world.query(PlayerSchema.component).map(([entity]) => entity)[0];
+    const player = playerRef === undefined ? undefined : this.world.get(playerRef, PlayerSchema);
 
     return {
       connected: this.#transport.connected,

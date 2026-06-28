@@ -258,7 +258,10 @@ target visibility, and other project rules.
 
 - The generated facade does not expose an explicit id escape hatch; public calls use entity refs and
   payload objects.
-- The runtime still exposes low-level world methods for direct integrations, tests, and examples.
+- Handwritten TypeScript protocols can use public world RPC methods directly, but packet codecs and
+  low-level sync runtimes remain internal.
+- Public world APIs do not accept numeric entity ids as entity inputs; use refs from `WorldEntity`,
+  handler contexts, queries, or generated `entities.*` helpers.
 - Rust and C# code generation do not exist in the current repo.
 - Stream correction/replay/prediction is not implemented; current streams provide batching, sequence
   filtering, pending limits, and minimal acknowledgements.

@@ -17,6 +17,7 @@ import {
   type ChannelName,
   type ClientTransport,
   type Clock,
+  type EntityRef,
   type PeerRef,
   type Logger,
   type ServerTransport,
@@ -214,7 +215,7 @@ describe("sync runtime", () => {
       type: ControlType.Hello,
       capabilities: ControlCapability.BatchedSnapshots,
     });
-    expect(clientWorld.get(player.id, PlayerState)?.hp.value).toBe(80);
+    expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(80);
     expect(host).toBeDefined();
   });
 
@@ -241,7 +242,7 @@ describe("sync runtime", () => {
     serverWorld.get(player, PlayerState)!.hp.value = 40;
     host.update();
 
-    expect(clientWorld.get(player.id, PlayerState)?.hp.value).toBe(40);
+    expect(clientWorld.get(player, PlayerState)?.hp.value).toBe(40);
     expect(worldInternals(clientWorld).getDirtyMask(player.id)).toBe(0);
   });
 
@@ -266,17 +267,17 @@ describe("sync runtime", () => {
     const client = createSyncClient({ world: clientWorld, transport: clientTransport, clock: clock(), registry });
 
     client.start();
-    expect(clientWorld.get(entity.id, Profile)?.name.value).toBe("alice");
-    expect(clientWorld.get(entity.id, Profile)?.bytes.value).toEqual(new Uint8Array([1, 2]));
-    expect(clientWorld.get(entity.id, Profile)?.scores.value).toEqual([3, 4]);
+    expect(clientWorld.get(entity, Profile)?.name.value).toBe("alice");
+    expect(clientWorld.get(entity, Profile)?.bytes.value).toEqual(new Uint8Array([1, 2]));
+    expect(clientWorld.get(entity, Profile)?.scores.value).toEqual([3, 4]);
 
     serverProfile.name.value = "bob";
     serverProfile.bytes.value = new Uint8Array([5, 6]);
     serverProfile.scores.value = [7, 8];
     host.update();
-    expect(clientWorld.get(entity.id, Profile)?.name.value).toBe("bob");
-    expect(clientWorld.get(entity.id, Profile)?.bytes.value).toEqual(new Uint8Array([5, 6]));
-    expect(clientWorld.get(entity.id, Profile)?.scores.value).toEqual([7, 8]);
+    expect(clientWorld.get(entity, Profile)?.name.value).toBe("bob");
+    expect(clientWorld.get(entity, Profile)?.bytes.value).toEqual(new Uint8Array([5, 6]));
+    expect(clientWorld.get(entity, Profile)?.scores.value).toEqual([7, 8]);
     expect(client).toBeDefined();
   });
 
@@ -310,7 +311,7 @@ describe("sync runtime", () => {
     client.send(Move, { dx: 0.5 });
     host.update();
 
-    expect(clientWorld.get(player.id, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
+    expect(clientWorld.get(player, PlayerState)?.x.value).toBeCloseTo(0.5, 2);
   });
 
   it("assigns peer entities and exposes them through RPC ctx", () => {
@@ -905,26 +906,27 @@ describe("sync runtime", () => {
       registry,
     });
 
-    serverWorld.setOwner(player, 1);
+    const peer = (serverWorld as unknown as { _ensurePeerEntity(peerId: number): EntityRef })._ensurePeerEntity(1);
+    serverWorld.setOwner(player, peer);
     client.start();
 
     expect(client.peerId()).toBe(1);
-    expect(clientWorld.ownerOf(player.id)).toBe(1);
-    expect(clientWorld.get(player.id, PlayerState)).toBeDefined();
+    expect(clientWorld.ownerOf(player)).toBe(1);
+    expect(clientWorld.get(player, PlayerState)).toBeDefined();
 
     serverWorld.clearOwner(player);
     host.update();
-    expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
+    expect(clientWorld.ownerOf(player)).toBe(ServerPeerId);
     expect(serverTransport.packets.at(-1)).toBeDefined();
 
-    serverWorld.setOwner(player, 1);
+    serverWorld.setOwner(player, peer);
     host.update();
-    expect(clientWorld.ownerOf(player.id)).toBe(1);
+    expect(clientWorld.ownerOf(player)).toBe(1);
 
     serverWorld.destroy(player);
     host.update();
-    expect(clientWorld.ownerOf(player.id)).toBe(ServerPeerId);
-    expect(clientWorld.get(player.id, PlayerState)).toBeUndefined();
+    expect(clientWorld.ownerOf(player)).toBe(ServerPeerId);
+    expect(clientWorld.get(player, PlayerState)).toBeUndefined();
   });
 
   it("syncs WorldEntity components through full and dirty snapshots", () => {

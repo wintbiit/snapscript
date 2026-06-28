@@ -30,8 +30,8 @@ events.Player.MoveDisabled.broadcast(serverWorld, playerEntity, { disabled: true
 events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, { disabled: true });
 ```
 
-`entities.*` reads entity refs from replicated client state. Generated project code should avoid raw
-`{ id }` refs except in focused tests.
+`entities.*` reads entity refs from replicated client state. Generated project code should not
+construct raw `{ id }` refs or pass numeric entity ids into world APIs.
 
 ## Handler Shape
 

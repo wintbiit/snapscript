@@ -27,7 +27,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
     position: { x: 0, y: 0 },
     health: { hp: 100 },
   });
-  world.setOwner(player, 0);
 
   registerServerRpc(world);
   registerServerSystems(world);

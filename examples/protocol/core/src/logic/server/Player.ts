@@ -27,8 +27,8 @@ function applyMove(
     return;
   }
 
-  if (world.ownerOf(player.id) === 0) {
-    world.setOwner(player.id, source);
+  if (world.ownerOf(target) === 0) {
+    world.setOwner(target, source);
   }
 
   player.position.x.value += payload.dx;
@@ -47,7 +47,8 @@ function findControlledPlayer(
   targetRef: CommandCtx<PlayerMovePayload>["target"],
 ) {
   const target = world.getPrefab(targetRef, Player);
-  if (target !== undefined && (world.ownerOf(targetRef) === source.id || world.ownerOf(targetRef) === 0)) {
+  const sourcePeerId = world.peerId(source);
+  if (target !== undefined && (world.ownerOf(targetRef) === sourcePeerId || world.ownerOf(targetRef) === 0)) {
     return { id: targetRef.id, position: target.position, health: target.health };
   }
   return undefined;
