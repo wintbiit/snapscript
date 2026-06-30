@@ -40,8 +40,8 @@ const wsUrl = computed(() => {
 let frame = 0;
 
 function refresh() {
-  server?.tick();
-  client?.tick();
+  server?.tick(16);
+  client?.tick(16);
   state.value = server?.snapshot() ?? client?.snapshot() ?? state.value;
 }
 

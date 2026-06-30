@@ -80,5 +80,5 @@ events.Player.MoveDisabled.broadcast(serverWorld, playerEntity, { disabled: true
 events.Player.MoveDisabled.sendTo(serverWorld, peerEntity, playerEntity, { disabled: true });
 ```
 
-The app and node packages supply platform concerns: WebSocket transport, clocks, tick loops, input,
+The app and node packages supply platform concerns: WebSocket transports, tick loops, input,
 and rendering. They do not own protocol definitions or gameplay RPC logic.

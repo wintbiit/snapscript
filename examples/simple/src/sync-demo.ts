@@ -13,7 +13,6 @@ import {
   varu32,
   type ChannelName,
   type ClientTransport,
-  type Clock,
   type ComponentInstanceOf,
   type ServerTransport,
   type PeerRef,
@@ -94,14 +93,10 @@ function toView(player: Player | ReadonlyPlayer | undefined): PlayerView | undef
   };
 }
 
-class BrowserClock implements Clock {
+class FrameCounter {
   #tick = 0;
 
-  nowMs(): number {
-    return performance.now();
-  }
-
-  tick(): number {
+  advance(_deltaTime: number): number {
     this.#tick += 1;
     return this.#tick;
   }
@@ -219,12 +214,11 @@ class WebSocketTransport implements ClientTransport, ServerTransport {
 }
 
 export class ServerPeer {
-  readonly clock = new BrowserClock();
+  readonly frames = new FrameCounter();
   readonly #transport = new WebSocketTransport();
   readonly world = createServerWorld({
     protocol,
     transport: this.#transport,
-    clock: this.clock,
   });
   // Server code owns entity creation and mutable NetRefs.
   readonly player = this.world.spawn(PlayerSchema);
@@ -265,8 +259,9 @@ export class ServerPeer {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   sendFull(): void {
@@ -277,7 +272,7 @@ export class ServerPeer {
     return {
       connected: this.#transport.connected,
       error: this.#transport.error,
-      tick: this.clock.peek(),
+      tick: this.frames.peek(),
       lastBytes: this.#transport.lastSentBytes,
       lastEvent: this.#lastEvent,
       player: toView(this.playerState()),
@@ -294,12 +289,11 @@ export class ServerPeer {
 }
 
 export class ClientPeer {
-  readonly clock = new BrowserClock();
+  readonly frames = new FrameCounter();
   readonly #transport = new WebSocketTransport();
   readonly world = createClientWorld({
     protocol,
     transport: this.#transport,
-    clock: this.clock,
   });
   #lastEvent: string | undefined;
 
@@ -315,8 +309,9 @@ export class ClientPeer {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   damage(): void {
@@ -347,7 +342,7 @@ export class ClientPeer {
     return {
       connected: this.#transport.connected,
       error: this.#transport.error,
-      tick: this.clock.peek(),
+      tick: this.frames.peek(),
       lastBytes: this.#transport.lastReceivedBytes,
       lastEvent: this.#lastEvent,
       player: toView(player),

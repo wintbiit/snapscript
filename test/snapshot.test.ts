@@ -22,7 +22,6 @@ import {
   createTestClientWorld,
   createTestServerWorld,
   testClientTransport,
-  testClock,
   testProtocol,
   testServerTransport,
 } from "./helpers";
@@ -57,7 +56,6 @@ describe("snapshot sync", () => {
       protocol: testProtocol(),
       localComponents: [Local],
       transport: testServerTransport(),
-      clock: testClock(),
     });
     const entity = world.spawn();
     world.add(entity, Local, { hp: 10 });
@@ -76,13 +74,11 @@ describe("snapshot sync", () => {
       protocol,
       localComponents: [Local],
       transport: testServerTransport(),
-      clock: testClock(),
     });
     const client = createClientWorld({
       protocol,
       localComponents: [Local],
       transport: testClientTransport(),
-      clock: testClock(),
     });
     const entity = server.spawn();
     server.add(entity, Local, { hp: 10 });
@@ -104,7 +100,6 @@ describe("snapshot sync", () => {
       protocol,
       localComponents: [Local],
       transport: testServerTransport(),
-      clock: testClock(),
     });
     const client = createTestClientWorld(protocol);
     const entity = server.spawn();

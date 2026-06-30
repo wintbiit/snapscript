@@ -1,4 +1,4 @@
-import { ServerPeerId, defaultLogger, type ClientTransport, type Clock, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
+import { ServerPeerId, defaultLogger, type ClientTransport, type ServerTransport, type Logger, type PeerId, type PeerRef } from "../platform/index";
 import type { RegistryLike } from "../registry/index";
 import {
   decodeCommandStream,
@@ -46,7 +46,7 @@ import { worldInternals } from "../world/internals";
 export interface SyncServerOptions {
   readonly world: ServerWorld;
   readonly transport: ServerTransport;
-  readonly clock: Clock;
+  readonly getTick: () => number;
   readonly registry: RegistryLike;
   readonly protocolHash?: string;
   readonly logger?: Logger;
@@ -62,7 +62,7 @@ export interface SyncServerOptions {
 export interface SyncClientOptions {
   readonly world: ClientWorld;
   readonly transport: ClientTransport;
-  readonly clock: Clock;
+  readonly getTick: () => number;
   readonly registry: RegistryLike;
   readonly protocolHash?: string;
   readonly logger?: Logger;
@@ -404,7 +404,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           options.transport.send(
             peer,
             "reliable",
-            encodeControl(ControlType.PeerAssigned, options.clock.tick(), 0, peerId, options.protocolHash, peerEntityId),
+            encodeControl(ControlType.PeerAssigned, options.getTick(), 0, peerId, options.protocolHash, peerEntityId),
           );
           sendFullSnapshot(peer);
         }
@@ -462,7 +462,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
           options.transport.send(
             peer,
             "unreliable",
-            encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, lastProcessed, options.clock.tick()),
+            encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, lastProcessed, options.getTick()),
           );
           return;
         }
@@ -480,7 +480,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
         options.transport.send(
           peer,
           "unreliable",
-          encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, nextLastProcessed, options.clock.tick()),
+          encodeCommandStreamAck(decoded.stream.rpcId, decoded.targetId, nextLastProcessed, options.getTick()),
         );
         return;
       }
@@ -495,7 +495,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       options.ensurePeerEntity?.(peerId);
       const state = stateFor(peerStates, peer);
       const ops = buildFullOpsForPeer(options.world, peerId, options.isVisible, state);
-      const bytes = encodeSnapshotOps(options.world, options.clock.tick(), ops);
+      const bytes = encodeSnapshotOps(options.world, options.getTick(), ops);
       options.transport.send(peer, "reliable", bytes);
       replaceKnownState(peerStates, peer, ops);
       worldInternals(options.world).clearWrittenDirty(dirtyOpsFromSnapshotOps(ops));
@@ -514,7 +514,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       return;
     }
 
-    const bytes = encodeFullSnapshot(options.world, options.clock.tick());
+    const bytes = encodeFullSnapshot(options.world, options.getTick());
     options.transport.broadcast("reliable", bytes);
   }
 
@@ -527,7 +527,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
     update() {
       const internals = worldInternals(options.world);
       const dirty = internals.getDirtySnapshot();
-      const tick = options.clock.tick();
+      const tick = options.getTick();
       const peerList = currentPeers(options.transport, peers);
       markDisconnectedPeers(options, peerIds, peers, [...peers]);
       if (trySendSharedUpdate(options, peerStates, peerList, dirty, tick)) {
@@ -570,7 +570,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       if (peer === undefined) {
         throw new Error(`ServerWorld.sendTo() unknown peer ${peerId}`);
       }
-      options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), ServerPeerId, peerId));
+      options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.getTick(), ServerPeerId, peerId));
     },
     sendEventTo(targets, sourceId, rpc, payload) {
       for (const target of Array.isArray(targets) ? targets : [targets]) {
@@ -578,7 +578,7 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
         if (peer === undefined) {
           throw new Error(`ServerWorld.sendEventTo() unknown peer entity ${target.peerEntityId}`);
         }
-        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), sourceId, target.peerEntityId));
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.getTick(), sourceId, target.peerEntityId));
       }
     },
     sendPeerEventTo(targets, rpc, payload) {
@@ -587,11 +587,11 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
         if (peer === undefined) {
           throw new Error(`ServerWorld.sendPeerEventTo() unknown peer entity ${target.peerEntityId}`);
         }
-        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), target.peerEntityId, target.peerEntityId));
+        options.transport.send(peer, rpc.channel, encodeRpc(rpc, payload, options.getTick(), target.peerEntityId, target.peerEntityId));
       }
     },
     broadcastPeerEvent(rpc, payload) {
-      const tick = options.clock.tick();
+      const tick = options.getTick();
       for (const peer of currentPeers(options.transport, peers)) {
         const peerId = peerIds.idFor(peer);
         const peerEntityId = options.ensurePeerEntity?.(peerId) ?? peerId;
@@ -602,10 +602,10 @@ export function createSyncServer(options: SyncServerOptions): SyncServer {
       }
     },
     broadcast(rpc, payload) {
-      options.transport.broadcast(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), ServerPeerId, 0));
+      options.transport.broadcast(rpc.channel, encodeRpc(rpc, payload, options.getTick(), ServerPeerId, 0));
     },
     broadcastEvent(sourceId, rpc, payload) {
-      const tick = options.clock.tick();
+      const tick = options.getTick();
       for (const peer of currentPeers(options.transport, peers)) {
         const peerId = peerIds.idFor(peer);
         if (sourceId !== WorldEntity.id && !isVisible(peerId, sourceId, options.isVisible)) {
@@ -814,7 +814,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   function requestFullSnapshot(): void {
     options.transport.send(
       "reliable",
-      encodeControl(ControlType.FullSnapshotRequest, options.clock.tick(), clientCapabilities(), undefined, options.protocolHash),
+      encodeControl(ControlType.FullSnapshotRequest, options.getTick(), clientCapabilities(), undefined, options.protocolHash),
     );
   }
 
@@ -822,7 +822,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     start() {
       options.transport.send(
         "reliable",
-        encodeControl(ControlType.Hello, options.clock.tick(), clientCapabilities(), undefined, options.protocolHash),
+        encodeControl(ControlType.Hello, options.getTick(), clientCapabilities(), undefined, options.protocolHash),
       );
     },
     update() {
@@ -833,7 +833,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         const samples = buffer.samples.slice(-streamLimits.maxSamplesPerPacket);
         options.transport.send(
           "unreliable",
-          encodeCommandStream(buffer.stream, assignedPeerEntityId, buffer.targetId, samples, options.clock.tick()),
+          encodeCommandStream(buffer.stream, assignedPeerEntityId, buffer.targetId, samples, options.getTick()),
         );
         buffer.dirty = false;
       }
@@ -843,10 +843,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     },
     requestFullSnapshot,
     send(rpc, payload) {
-      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), assignedPeerEntityId, 0));
+      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.getTick(), assignedPeerEntityId, 0));
     },
     sendCommand(targetId, rpc, payload) {
-      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.clock.tick(), assignedPeerEntityId, targetId));
+      options.transport.send(rpc.channel, encodeRpc(rpc, payload, options.getTick(), assignedPeerEntityId, targetId));
     },
     pushCommandStream(targetId, stream, payload, clientTick, dtMs) {
       const key = clientCommandStreamKey(targetId, stream.rpcId);

@@ -173,10 +173,10 @@ const packageJsonTemplate = `<%~ JSON.stringify({
     build: "pnpm snap:generate && pnpm typecheck && pnpm test",
   },
   dependencies: {
-    snapscript: "^0.3.0",
+    snapscript: "^0.4.0",
   },
   devDependencies: {
-    "snapscript-cli": "^0.3.0",
+    "snapscript-cli": "^0.4.0",
     typescript: "^5.9.3",
     vitest: "^4.1.9",
   },
@@ -261,7 +261,7 @@ ownership, cooldowns, possession, and project-specific rules in handlers.
 
 ## Platform Boundary
 
-A real platform layer should adapt its transport into SnapScript packets, provide a clock/tick loop,
+A real platform layer should adapt its transport into SnapScript packets, provide a tick loop,
 forward input into client commands, and render/read snapshots from this core package. Tests and
 host-mode wiring can use \`createMemoryTransportPair()\` from \`snapscript\`.
 `;
@@ -296,7 +296,6 @@ export * from "./generated/protocol";
 
 const exampleCreateServerTemplate = `import {
   createServerWorld,
-  type Clock,
   type Logger,
   type ServerTransport,
   type ServerWorld,
@@ -307,7 +306,6 @@ import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;
-  readonly clock: Clock;
   readonly logger?: Logger;
 }
 
@@ -315,7 +313,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
   const world = createServerWorld({
     protocol,
     transport: options.transport,
-    clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
@@ -333,7 +330,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
 
 const genericCreateServerTemplate = `import {
   createServerWorld,
-  type Clock,
   type Logger,
   type ServerTransport,
   type ServerWorld,
@@ -344,7 +340,6 @@ import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;
-  readonly clock: Clock;
   readonly logger?: Logger;
 }
 
@@ -352,7 +347,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
   const world = createServerWorld({
     protocol,
     transport: options.transport,
-    clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
@@ -367,7 +361,6 @@ const createClientTemplate = `import {
   createClientWorld,
   type ClientTransport,
   type ClientWorld,
-  type Clock,
   type Logger,
 } from "snapscript";
 import { protocol } from "./generated/protocol";
@@ -376,7 +369,6 @@ import { registerClientSystems } from "./generated/systems.client";
 
 export interface CreateClientOptions {
   readonly transport: ClientTransport;
-  readonly clock: Clock;
   readonly logger?: Logger;
 }
 
@@ -384,7 +376,6 @@ export function createClient(options: CreateClientOptions): ClientWorld {
   const world = createClientWorld({
     protocol,
     transport: options.transport,
-    clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
@@ -447,34 +438,23 @@ export function register(world: ClientWorld): void {
 
 const exampleRoundtripTestTemplate = `import { describe, expect, it } from "vitest";
 import { createClient, createServer, Position, commands, entities } from "../src/index";
-import { createMemoryTransportPair, type Clock } from "snapscript";
-
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
-}
+import { createMemoryTransportPair } from "snapscript";
 
 describe("protocol core", () => {
   it("round-trips a generated command through memory transport", () => {
     const transport = createMemoryTransportPair();
-    const server = createServer({ transport: transport.server, clock: clock() });
-    const client = createClient({ transport: transport.client, clock: clock() });
+    const server = createServer({ transport: transport.server });
+    const client = createClient({ transport: transport.client });
 
-    client.tick();
-    server.tick();
-    client.tick();
+    client.tick(16);
+    server.tick(16);
+    client.tick(16);
 
     const playerEntity = entities.Player.first(client);
     if (playerEntity === undefined) throw new Error("expected a replicated Player");
     commands.Player.Move(client, playerEntity, { dx: 1, dy: 0 });
-    server.tick();
-    client.tick();
+    server.tick(16);
+    client.tick(16);
 
     const position = client.get(playerEntity, Position);
     expect(client.myPeerId()).toBe(1);
@@ -487,28 +467,17 @@ describe("protocol core", () => {
 
 const genericRoundtripTestTemplate = `import { describe, expect, it } from "vitest";
 import { createClient, createServer } from "../src/index";
-import { createMemoryTransportPair, type Clock } from "snapscript";
-
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
-}
+import { createMemoryTransportPair } from "snapscript";
 
 describe("protocol core", () => {
   it("creates server and client worlds through memory transport", () => {
     const transport = createMemoryTransportPair();
-    const server = createServer({ transport: transport.server, clock: clock() });
-    const client = createClient({ transport: transport.client, clock: clock() });
+    const server = createServer({ transport: transport.server });
+    const client = createClient({ transport: transport.client });
 
-    client.tick();
-    server.tick();
-    client.tick();
+    client.tick(16);
+    server.tick(16);
+    client.tick(16);
 
     expect(client.myPeerId()).toBe(1);
   });

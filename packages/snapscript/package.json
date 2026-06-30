@@ -1,6 +1,6 @@
 {
   "name": "snapscript",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Platform-agnostic TypeScript network synchronization framework.",
   "license": "Apache-2.0",
   "type": "module",

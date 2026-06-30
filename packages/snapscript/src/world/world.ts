@@ -2,7 +2,6 @@ import { ServerPeerId, defaultLogger, type PeerId } from "../platform/index";
 import type {
   ChannelName,
   ClientTransport,
-  Clock,
   ServerTransport,
   Logger,
   PeerRef,
@@ -344,8 +343,6 @@ export interface ServerWorldOptions {
   readonly protocol: ProtocolDefinition;
   /** Server transport adapter. Reliability and ordering are provided by the server/engine layer. */
   readonly transport: ServerTransport;
-  /** Monotonic frame clock used for system context and runtime tick ordering. */
-  readonly clock: Clock;
   /** Optional structured logger used for isolated handler/runtime errors. */
   readonly logger?: Logger;
   /**
@@ -381,8 +378,6 @@ export interface ClientWorldOptions {
   readonly protocol: ProtocolDefinition;
   /** Client transport adapter. Snapshot and RPC bytes are delivered as raw `Uint8Array` packets. */
   readonly transport: ClientTransport;
-  /** Monotonic frame clock used for system context and runtime tick ordering. */
-  readonly clock: Clock;
   /** Optional structured logger used for isolated handler/runtime errors. */
   readonly logger?: Logger;
   /** Optional command-stream resource limits. */
@@ -456,6 +451,20 @@ function createWorldInternals(core: WorldCore): WorldInternals {
     applyDestroyFromRemote: (entityId, schemaId) =>
       core._applyDestroyFromRemote(entityId, schemaId),
   };
+}
+
+class WorldClock {
+  frameTick = 0;
+  time = 0;
+  dt = 0;
+
+  advance(deltaTime: number, label: "ServerWorld.tick()" | "ClientWorld.tick()"): FrameContext {
+    assertDeltaTime(deltaTime, label);
+    this.frameTick += 1;
+    this.dt = deltaTime;
+    this.time += deltaTime;
+    return { tick: this.frameTick, dtMs: this.dt, nowMs: this.time };
+  }
 }
 
 class WorldCore implements QueryWorldAccess {
@@ -1810,8 +1819,8 @@ export interface ServerWorld {
   ): void;
   /** Registers a named system in a phase. The returned function unregisters it. */
   system(name: string, phase: SystemPhase, fn: SystemFn<ServerWorld>): () => void;
-  /** Advances transport input, systems, and server snapshot output once. */
-  tick(): void;
+  /** Advances transport input, systems, and server snapshot output once. `deltaTime` is measured in milliseconds. */
+  tick(deltaTime: number): void;
   /** Handles an endpoint-addressed client-to-server command. */
   onCommand<TFields extends FieldDefinitions>(
     rpc: CommandDefinition<TFields>,
@@ -1862,7 +1871,7 @@ class ServerWorldImpl implements ServerWorld {
   readonly #core: WorldCore;
   readonly #transport: QueuedServerTransport;
   readonly #runtime: SyncServer;
-  readonly #clock: Clock;
+  readonly #clock = new WorldClock();
   readonly #protocol: ProtocolDefinition;
   readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
   readonly #visibility = new Map<PeerId, Map<number, boolean>>();
@@ -1870,16 +1879,12 @@ class ServerWorldImpl implements ServerWorld {
   readonly #interestWorld: InterestWorld;
   #interest?: (peerId: PeerId, entity: ReadonlyEntityRef, world: InterestWorld) => boolean;
   #started = false;
-  #lastNowMs: number | undefined;
-  #systemTick = 0;
 
   constructor(options: ServerWorldOptions) {
     assertServerWorldOptions(options);
-    const clock = checkedClock("createServerWorld()", options.clock);
     this.#core = new WorldCore(options.protocol, options.localComponents, "createServerWorld");
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
-    this.#clock = clock;
     this.#transport = new QueuedServerTransport(options.transport);
     this.#visibilityDefault = options.visibility ?? "all";
     this.#interestWorld = this.#createInterestWorld();
@@ -1887,7 +1892,7 @@ class ServerWorldImpl implements ServerWorld {
       this.#interest = options.interest;
     }
     this.#runtime = createSyncServer(
-      serverRuntimeOptions(this, this.#transport, options, clock, () => this.#canReusePeerSnapshots()),
+      serverRuntimeOptions(this, this.#transport, options, () => this.#canReusePeerSnapshots()),
     );
     Object.freeze(this);
   }
@@ -2059,12 +2064,12 @@ class ServerWorldImpl implements ServerWorld {
     return this.#core.system(name, phase, fn);
   }
 
-  tick(): void {
+  tick(deltaTime: number): void {
+    const frame = this.#clock.advance(deltaTime, "ServerWorld.tick()");
     if (!this.#started) {
       this.#runtime.start();
       this.#started = true;
     }
-    const frame = this.#frameContext();
     this.#transport.drain();
     this.#runTimedSystems("preUpdate", frame);
     this.#runTimedSystems("update", frame);
@@ -2243,13 +2248,8 @@ class ServerWorldImpl implements ServerWorld {
     this.#core.runSystems(this, phase, { ...frame, phase });
   }
 
-  #frameContext(): FrameContext {
-    const nowMs = this.#clock.nowMs();
-    assertMonotonicNowMs("createServerWorld()", this.#lastNowMs, nowMs);
-    const dtMs = this.#lastNowMs === undefined ? 0 : nowMs - this.#lastNowMs;
-    this.#lastNowMs = nowMs;
-    this.#systemTick += 1;
-    return { tick: this.#systemTick, dtMs, nowMs };
+  _tick(): number {
+    return this.#clock.frameTick;
   }
 
   #createInterestWorld(): InterestWorld {
@@ -2331,8 +2331,8 @@ export interface ClientWorld {
   destroy(entity: EntityRef): boolean;
   /** Registers a named client-side system. The returned function unregisters it. */
   system(name: string, phase: SystemPhase, fn: SystemFn<ClientWorld>): () => void;
-  /** Advances transport input and client systems once. */
-  tick(): void;
+  /** Advances transport input and client systems once. `deltaTime` is measured in milliseconds. */
+  tick(deltaTime: number): void;
   /** Sends an endpoint-addressed client-to-server command. */
   sendCommand<TFields extends FieldDefinitions>(
     target: ReadonlyEntityRef,
@@ -2363,26 +2363,22 @@ class ClientWorldImpl implements ClientWorld {
   readonly #core: WorldCore;
   readonly #transport: QueuedClientTransport;
   readonly #runtime: SyncClient;
-  readonly #clock: Clock;
+  readonly #clock = new WorldClock();
   readonly #logger: Logger;
   readonly #protocol: ProtocolDefinition;
   readonly #knownProtocolRpcs = new WeakSet<RpcDefinition>();
   readonly #snapshotHandlers = new Set<SnapshotHandler<ClientWorld>>();
   #started = false;
-  #lastNowMs: number | undefined;
-  #systemTick = 0;
 
   constructor(options: ClientWorldOptions) {
     assertClientWorldOptions(options);
-    const clock = checkedClock("createClientWorld()", options.clock);
     this.#core = new WorldCore(options.protocol, options.localComponents, "createClientWorld", 0x8000_0000);
     registerWorldInternals(this, createWorldInternals(this.#core));
     this.#protocol = options.protocol;
-    this.#clock = clock;
     this.#logger = options.logger ?? defaultLogger;
     this.#transport = new QueuedClientTransport(options.transport);
     this.#runtime = createSyncClient(
-      clientRuntimeOptions(this, this.#transport, options, clock, (context) =>
+      clientRuntimeOptions(this, this.#transport, options, (context) =>
         this.#notifySnapshot(context),
       ),
     );
@@ -2525,12 +2521,12 @@ class ClientWorldImpl implements ClientWorld {
     return this.#core.system(name, phase, fn);
   }
 
-  tick(): void {
+  tick(deltaTime: number): void {
+    const frame = this.#clock.advance(deltaTime, "ClientWorld.tick()");
     if (!this.#started) {
       this.#runtime.start();
       this.#started = true;
     }
-    const frame = this.#frameContext();
     this.#transport.drain();
     this.#runTimedSystems("preUpdate", frame);
     this.#runTimedSystems("update", frame);
@@ -2639,13 +2635,8 @@ class ClientWorldImpl implements ClientWorld {
     this.#core.runSystems(this, phase, { ...frame, phase });
   }
 
-  #frameContext(): FrameContext {
-    const nowMs = this.#clock.nowMs();
-    assertMonotonicNowMs("createClientWorld()", this.#lastNowMs, nowMs);
-    const dtMs = this.#lastNowMs === undefined ? 0 : nowMs - this.#lastNowMs;
-    this.#lastNowMs = nowMs;
-    this.#systemTick += 1;
-    return { tick: this.#systemTick, dtMs, nowMs };
+  _tick(): number {
+    return this.#clock.frameTick;
   }
 }
 
@@ -2663,13 +2654,12 @@ function serverRuntimeOptions(
   world: ServerWorld,
   transport: QueuedServerTransport,
   options: ServerWorldOptions,
-  clock: Clock,
   canReusePeerSnapshots: () => boolean,
 ): SyncServerOptions {
   return {
     world,
     transport,
-    clock,
+    getTick: () => (world as ServerWorldImpl)._tick(),
     registry: registryFromOptions(options),
     ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
@@ -2686,13 +2676,12 @@ function clientRuntimeOptions(
   world: ClientWorld,
   transport: QueuedClientTransport,
   options: ClientWorldOptions,
-  clock: Clock,
   onSnapshot: (context: SnapshotContext) => void,
 ): SyncRuntimeOptions {
   return {
     world,
     transport,
-    clock,
+    getTick: () => (world as ClientWorldImpl)._tick(),
     registry: registryFromOptions(options),
     ...(options.protocol.hash === undefined ? {} : { protocolHash: options.protocol.hash }),
     logger: options.logger ?? defaultLogger,
@@ -2805,7 +2794,6 @@ function assertServerWorldOptions(options: unknown): asserts options is ServerWo
   const source = assertOptionObject("createServerWorld", options);
   assertProtocol("createServerWorld", source.protocol);
   assertServerTransport(source.transport);
-  assertClock("createServerWorld", source.clock);
   assertLogger("createServerWorld", source.logger);
   if (
     source.visibility !== undefined &&
@@ -2834,7 +2822,6 @@ function assertClientWorldOptions(options: unknown): asserts options is ClientWo
   const source = assertOptionObject("createClientWorld", options);
   assertProtocol("createClientWorld", source.protocol);
   assertClientTransport(source.transport);
-  assertClock("createClientWorld", source.clock);
   assertLogger("createClientWorld", source.logger);
   if (source.channel !== undefined) {
     throw new Error("createClientWorld() does not accept channel; control and snapshots use reliable, while RPCs declare their own channel");
@@ -2845,7 +2832,6 @@ function assertClientWorldOptions(options: unknown): asserts options is ClientWo
 const serverWorldOptionKeys = new Set([
   "protocol",
   "transport",
-  "clock",
   "logger",
   "snapshotEncoding",
   "visibility",
@@ -2857,7 +2843,6 @@ const serverWorldOptionKeys = new Set([
 const clientWorldOptionKeys = new Set([
   "protocol",
   "transport",
-  "clock",
   "logger",
   "onSnapshot",
   "streamLimits",
@@ -2918,20 +2903,6 @@ function assertClientTransport(transport: unknown): asserts transport is ClientT
   }
 }
 
-function assertClock(
-  factoryName: "createServerWorld" | "createClientWorld",
-  clock: unknown,
-): asserts clock is Clock {
-  if (
-    clock === null ||
-    typeof clock !== "object" ||
-    !isFunction((clock as { readonly nowMs?: unknown }).nowMs) ||
-    !isFunction((clock as { readonly tick?: unknown }).tick)
-  ) {
-    throw new Error(`${factoryName}() requires a clock with nowMs() and tick()`);
-  }
-}
-
 function assertLogger(
   factoryName: "createServerWorld" | "createClientWorld",
   logger: unknown,
@@ -2950,32 +2921,15 @@ function assertLogger(
   }
 }
 
-function checkedClock(factoryName: "createServerWorld()" | "createClientWorld()", clock: Clock): Clock {
-  return {
-    nowMs() {
-      const nowMs = clock.nowMs();
-      if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
-        throw new Error(`${factoryName} clock.nowMs() must return a finite number`);
-      }
-      return nowMs;
-    },
-    tick() {
-      const tick = clock.tick();
-      if (!Number.isInteger(tick) || tick < 0 || tick > 0xffffffff) {
-        throw new Error(`${factoryName} clock.tick() must return an integer in [0, 4294967295]`);
-      }
-      return tick;
-    },
-  };
-}
-
-function assertMonotonicNowMs(
-  factoryName: "createServerWorld()" | "createClientWorld()",
-  previousNowMs: number | undefined,
-  nowMs: number,
-): void {
-  if (previousNowMs !== undefined && nowMs < previousNowMs) {
-    throw new Error(`${factoryName} clock.nowMs() must be monotonic`);
+function assertDeltaTime(
+  deltaTime: unknown,
+  label: "ServerWorld.tick()" | "ClientWorld.tick()",
+): asserts deltaTime is number {
+  if (deltaTime === undefined) {
+    throw new Error(`${label} requires deltaTime in milliseconds`);
+  }
+  if (typeof deltaTime !== "number" || !Number.isFinite(deltaTime) || deltaTime < 0) {
+    throw new Error(`${label} deltaTime must be a finite non-negative number in milliseconds`);
   }
 }
 

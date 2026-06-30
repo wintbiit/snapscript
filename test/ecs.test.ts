@@ -9,7 +9,6 @@ import {
   u16,
   type ChannelName,
   type ClientTransport,
-  type Clock,
   type ComponentSchema,
   type ServerTransport,
   type PeerRef,
@@ -20,17 +19,6 @@ import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/inde
 import type { ComponentRecord } from "../packages/snapscript/src/world/records";
 import { SparseSetComponentStorage } from "../packages/snapscript/src/world/storage";
 import { createTestClientWorld, createTestServerWorld, testProtocol } from "./helpers";
-
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
-}
 
 class RecordingTransport implements ClientTransport, ServerTransport {
   readonly channels: ChannelName[] = [];
@@ -450,7 +438,7 @@ describe("ecs world", () => {
     world.system("update", "update", () => order.push("update"));
     world.system("post", "postUpdate", () => order.push("post"));
 
-    world.tick();
+    world.tick(16);
 
     expect(order).toEqual(["pre", "update", "post"]);
   });
@@ -481,7 +469,7 @@ describe("ecs world", () => {
       throw new Error("broken");
     });
 
-    expect(() => host.tick()).toThrow(/world\.system\(\) "boom" failed in phase "update"/);
+    expect(() => host.tick(16)).toThrow(/world\.system\(\) "boom" failed in phase "update"/);
   });
 
   it("freezes system contexts shared within a phase", () => {
@@ -500,9 +488,9 @@ describe("ecs world", () => {
       seen.push(`second:${context.dtMs}`);
     });
 
-    host.tick();
+    host.tick(16);
 
-    expect(seen).toEqual(["first:0", "second:0"]);
+    expect(seen).toEqual(["first:16", "second:16"]);
   });
 
   it("runs systems from a stable phase snapshot", () => {
@@ -519,28 +507,18 @@ describe("ecs world", () => {
     });
     host.system("second", "update", () => order.push("second"));
 
-    host.tick();
+    host.tick(16);
     expect(order).toEqual(["first", "second"]);
 
-    host.tick();
+    host.tick(16);
     expect(order).toEqual(["first", "second", "first", "second", "late"]);
   });
 
   it("uses one timing context per world tick across phases", () => {
     const protocol = defineProtocol({});
-    let nowMs = 1000;
-    let networkTick = 0;
-    const timedClock: Clock = {
-      nowMs: () => nowMs,
-      tick: () => {
-        networkTick += 1;
-        return networkTick;
-      },
-    };
     const host = createServerWorld({
       protocol,
       transport: new RecordingTransport(),
-      clock: timedClock,
     });
     const contexts: { phase: string; tick: number; dtMs: number; nowMs: number }[] = [];
 
@@ -548,9 +526,8 @@ describe("ecs world", () => {
       host.system(`host-${phase}`, phase, (_world, context) => contexts.push(context));
     }
 
-    host.tick();
-    nowMs = 1016;
-    host.tick();
+    host.tick(16);
+    host.tick(16);
 
     expect(contexts.map((context) => context.phase)).toEqual([
       "preUpdate",
@@ -563,34 +540,24 @@ describe("ecs world", () => {
       "network",
     ]);
     expect(contexts.slice(0, 4).map(({ tick, dtMs, nowMs }) => ({ tick, dtMs, nowMs }))).toEqual([
-      { tick: 1, dtMs: 0, nowMs: 1000 },
-      { tick: 1, dtMs: 0, nowMs: 1000 },
-      { tick: 1, dtMs: 0, nowMs: 1000 },
-      { tick: 1, dtMs: 0, nowMs: 1000 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
     ]);
     expect(contexts.slice(4).map(({ tick, dtMs, nowMs }) => ({ tick, dtMs, nowMs }))).toEqual([
-      { tick: 2, dtMs: 16, nowMs: 1016 },
-      { tick: 2, dtMs: 16, nowMs: 1016 },
-      { tick: 2, dtMs: 16, nowMs: 1016 },
-      { tick: 2, dtMs: 16, nowMs: 1016 },
+      { tick: 2, dtMs: 16, nowMs: 32 },
+      { tick: 2, dtMs: 16, nowMs: 32 },
+      { tick: 2, dtMs: 16, nowMs: 32 },
+      { tick: 2, dtMs: 16, nowMs: 32 },
     ]);
   });
 
   it("uses one timing context per client world tick", () => {
     const protocol = defineProtocol({});
-    let nowMs = 2000;
-    let networkTick = 0;
-    const timedClock: Clock = {
-      nowMs: () => nowMs,
-      tick: () => {
-        networkTick += 1;
-        return networkTick;
-      },
-    };
     const client = createClientWorld({
       protocol,
       transport: new RecordingTransport(),
-      clock: timedClock,
     });
     const contexts: { phase: string; tick: number; dtMs: number; nowMs: number }[] = [];
 
@@ -598,19 +565,18 @@ describe("ecs world", () => {
       client.system(`client-${phase}`, phase, (_world, context) => contexts.push(context));
     }
 
-    client.tick();
-    nowMs = 2020;
-    client.tick();
+    client.tick(16);
+    client.tick(20);
 
     expect(contexts.slice(0, 3).map(({ tick, dtMs, nowMs }) => ({ tick, dtMs, nowMs }))).toEqual([
-      { tick: 1, dtMs: 0, nowMs: 2000 },
-      { tick: 1, dtMs: 0, nowMs: 2000 },
-      { tick: 1, dtMs: 0, nowMs: 2000 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
+      { tick: 1, dtMs: 16, nowMs: 16 },
     ]);
     expect(contexts.slice(3).map(({ tick, dtMs, nowMs }) => ({ tick, dtMs, nowMs }))).toEqual([
-      { tick: 2, dtMs: 20, nowMs: 2020 },
-      { tick: 2, dtMs: 20, nowMs: 2020 },
-      { tick: 2, dtMs: 20, nowMs: 2020 },
+      { tick: 2, dtMs: 20, nowMs: 36 },
+      { tick: 2, dtMs: 20, nowMs: 36 },
+      { tick: 2, dtMs: 20, nowMs: 36 },
     ]);
   });
 
@@ -671,7 +637,7 @@ describe("ecs world", () => {
     const pos = world.add(entity, Position);
     encodeDirty(world, 1);
     const transport = new RecordingTransport();
-    const host = createSyncServer({ world, transport, clock: clock(), registry });
+    const host = createSyncServer({ world, transport, registry, getTick: () => 1 });
 
     pos.x.value = 1;
     host.update();

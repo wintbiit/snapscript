@@ -2,7 +2,6 @@ import { Bench, hrtimeNow } from "tinybench";
 import { describe, expect, it } from "vitest";
 import type {
   ChannelName,
-  Clock,
   ClientWorld,
   ClientTransport,
   ComponentQuery,
@@ -121,19 +120,6 @@ class ExampleBenchTransport implements ClientTransport, ServerTransport {
   }
 }
 
-class ExampleBenchClock implements Clock {
-  #tick = 0;
-
-  nowMs(): number {
-    return this.#tick * 16.666;
-  }
-
-  tick(): number {
-    this.#tick += 1;
-    return this.#tick;
-  }
-}
-
 function transportPair(): [ExampleBenchTransport, ExampleBenchTransport] {
   const host = new ExampleBenchTransport();
   const client = new ExampleBenchTransport();
@@ -214,7 +200,6 @@ function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): EcsBench
   const hostOptions = {
     protocol,
     transport: serverTransport,
-    clock: new ExampleBenchClock(),
     visibility: "all",
     ...(mode.snapshotEncoding === undefined ? {} : { snapshotEncoding: mode.snapshotEncoding }),
   } as Parameters<typeof createServerWorld>[0];
@@ -224,7 +209,6 @@ function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): EcsBench
   const client = createClientWorld({
     protocol,
     transport: clientTransport,
-    clock: new ExampleBenchClock(),
   });
 
   seedDefaultExampleActors(host);
@@ -233,9 +217,9 @@ function createEcsBenchPair(extraEntities: number, mode: EcsBenchMode): EcsBench
     runExampleMovement(world);
   });
 
-  client.tick();
-  host.tick();
-  client.tick();
+  client.tick(16);
+  host.tick(16);
+  client.tick(16);
   serverTransport.resetCounters();
   clientTransport.resetCounters();
   return { host, client, serverTransport, clientTransport };
@@ -296,19 +280,19 @@ function countExampleRenderViews(world: ClientWorld): number {
 }
 
 function runNetworkedFrame(host: ServerWorld, client: ClientWorld): number {
-  host.tick();
-  client.tick();
+  host.tick(16);
+  client.tick(16);
   return countExampleRenderViews(client);
 }
 
 function runServerTickSend(host: ServerWorld, serverTransport: ExampleBenchTransport): number {
   serverTransport.resetCounters();
-  host.tick();
+  host.tick(16);
   return serverTransport.sent;
 }
 
 function runClientTickApply(client: ClientWorld): void {
-  client.tick();
+  client.tick(16);
 }
 
 function report(rows: readonly ExampleBenchRow[]): void {
@@ -416,7 +400,7 @@ describe("example-derived benchmark", () => {
             beforeEach: () => {
               clientApplyPair = createEcsBenchPair(extraEntities, mode);
               clientApplyPair.serverTransport.resetCounters();
-              clientApplyPair.host.tick();
+              clientApplyPair.host.tick(16);
             },
           },
         );

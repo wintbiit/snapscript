@@ -47,8 +47,8 @@ const pageTitle = computed(() => {
 let frame = 0;
 
 function refresh() {
-  server?.tick();
-  client?.tick();
+  server?.tick(16);
+  client?.tick(16);
   peerState.value = server?.snapshot() ?? client?.snapshot() ?? peerState.value;
 }
 

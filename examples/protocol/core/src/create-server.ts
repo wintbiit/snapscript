@@ -1,6 +1,5 @@
 import {
   createServerWorld,
-  type Clock,
   type Logger,
   type ServerTransport,
   type ServerWorld,
@@ -11,7 +10,6 @@ import { registerServerSystems } from "./generated/systems.server";
 
 export interface CreateServerOptions {
   readonly transport: ServerTransport;
-  readonly clock: Clock;
   readonly logger?: Logger;
 }
 
@@ -19,7 +17,6 @@ export function createServer(options: CreateServerOptions): ServerWorld {
   const world = createServerWorld({
     protocol,
     transport: options.transport,
-    clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 

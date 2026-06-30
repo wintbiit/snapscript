@@ -8,7 +8,6 @@ import {
   defineEvent,
   defineProtocol,
   u16,
-  type Clock,
   type ClientTransport,
   type ComponentOrPrefab,
   type ComponentQuery,
@@ -82,10 +81,6 @@ const serverTransport: ServerTransport = {
     return [];
   },
 };
-const clock: Clock = {
-  nowMs: () => 0,
-  tick: () => 0,
-};
 const Player = defineEntity("TypePlayer", { hp: u16(1) });
 const Position = defineComponent("TypePosition", { x: u16(0) });
 const Velocity = defineComponent("TypeVelocity", { x: u16(0) });
@@ -107,11 +102,11 @@ const componentOrPrefab: ComponentOrPrefab = Actor;
 const componentQuery = [Position, Velocity] as const satisfies ComponentQuery;
 componentOrPrefab.name.toString();
 componentQuery[0].name.toString();
-const host = createServerWorld({ protocol, transport: serverTransport, clock });
-const client = createClientWorld({ protocol, transport, clock });
+const host = createServerWorld({ protocol, transport: serverTransport });
+const client = createClientWorld({ protocol, transport });
 const worldEntityId: number = WorldEntity.id;
 const typedServer: ServerWorld = host;
-typedServer.tick();
+typedServer.tick(16);
 const hostReader: ReplicatedStateReader = host;
 const clientReader: ReplicatedStateReader = client;
 host.add(WorldEntity, Position);
@@ -132,8 +127,10 @@ clientReader.query(Position).forEach(([_entity, position]) => {
   position.x.value.toFixed();
 });
 if (false) {
+  // @ts-expect-error tick requires deltaTime in milliseconds
+  typedServer.tick();
   // @ts-expect-error worlds require a protocol instead of a raw registry fallback
-  createServerWorld({ transport: serverTransport, clock });
+  createServerWorld({ transport: serverTransport });
   // @ts-expect-error component fields must come from SnapScript field helpers
   defineComponent("FakeField", { hp: { defaultValue: 1 } });
   createServerWorld({
@@ -151,12 +148,10 @@ if (false) {
       manifest: () => ({ components: [], prefabs: [], commands: [], events: [], streams: [] }),
     },
     transport: serverTransport,
-    clock,
   });
   createServerWorld({
     protocol,
     transport: serverTransport,
-    clock,
     interest(_peerId, entity, world) {
       entity.id.toFixed();
       world.has(entity, Position);
@@ -180,33 +175,29 @@ if (false) {
   createServerWorld({
     protocol,
     transport: serverTransport,
-    clock,
     // @ts-expect-error world-level channels are fixed; set channel on commands/events instead
     channel: "unreliable",
   });
   createServerWorld({
     protocol,
     transport: serverTransport,
-    clock,
     // @ts-expect-error server world options fail fast for unknown keys
     visiblity: "none",
   });
   createClientWorld({
     protocol,
     transport,
-    clock,
     // @ts-expect-error world-level channels are fixed; set channel on commands/events instead
     channel: "unreliable",
   });
   createClientWorld({
     protocol,
     transport,
-    clock,
     // @ts-expect-error client worlds do not accept server visibility hooks
     interest: () => true,
   });
   // @ts-expect-error ServerWorld is a type-only public surface; use createServerWorld().
-  new ServerWorldValue({ protocol, transport: serverTransport, clock });
+  new ServerWorldValue({ protocol, transport: serverTransport });
   // @ts-expect-error field codec is internal
   u16(0).codec;
   // @ts-expect-error schema codec is internal

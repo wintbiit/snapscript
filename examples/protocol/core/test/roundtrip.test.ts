@@ -1,33 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { createClient, createServer, Position, commands, entities } from "../src/index";
-import { createMemoryTransportPair, type Clock } from "snapscript";
-
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
-}
+import { createMemoryTransportPair } from "snapscript";
 
 describe("protocol core", () => {
   it("round-trips a generated command through memory transport", () => {
     const transport = createMemoryTransportPair();
-    const server = createServer({ transport: transport.server, clock: clock() });
-    const client = createClient({ transport: transport.client, clock: clock() });
+    const server = createServer({ transport: transport.server });
+    const client = createClient({ transport: transport.client });
 
-    client.tick();
-    server.tick();
-    client.tick();
+    client.tick(16);
+    server.tick(16);
+    client.tick(16);
 
     const playerEntity = entities.Player.first(client);
     if (playerEntity === undefined) throw new Error("expected a replicated Player");
     commands.Player.Move(client, playerEntity, { dx: 1, dy: 0 });
-    server.tick();
-    client.tick();
+    server.tick(16);
+    client.tick(16);
 
     const position = client.get(playerEntity, Position);
     expect(client.myPeerId()).toBe(1);

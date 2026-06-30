@@ -114,7 +114,6 @@ export type {
 export type {
   ChannelName,
   ClientTransport,
-  Clock,
   ILogger,
   MemoryTransportPair,
   ServerTransport,

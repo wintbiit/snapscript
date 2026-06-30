@@ -156,8 +156,9 @@ events.World.GameStarted.broadcast(serverWorld, {});
 `entities.*` reads entity refs from replicated client state. Generated project code should not need
 to construct raw `{ id }` refs. `events.*.sendTo()` accepts PeerEntity refs, not numeric peer ids.
 
-Stream calls enqueue samples. `ClientWorld.tick()` flushes dirty stream queues during the `network`
-phase, so multiple samples pushed in one frame can be batched into one command-stream packet.
+Stream calls enqueue samples. `ClientWorld.tick(deltaTime)` flushes dirty stream queues during the
+`network` phase, so multiple samples pushed in one frame can be batched into one command-stream
+packet. `deltaTime` is measured in milliseconds.
 
 ## Handler Shape
 
@@ -215,13 +216,11 @@ Create worlds explicitly in platform code or generated core helpers:
 const serverWorld = createServerWorld({
   protocol,
   transport: serverTransport,
-  clock,
 });
 
 const clientWorld = createClientWorld({
   protocol,
   transport: clientTransport,
-  clock,
 });
 ```
 
@@ -239,7 +238,6 @@ const serverWorld = createServerWorld({
   protocol,
   localComponents: [ServerAiState],
   transport: serverTransport,
-  clock,
 });
 
 const ai = serverWorld.spawn();
@@ -306,8 +304,8 @@ const protocol = defineProtocol({
   commands: { StartGame },
 });
 
-const serverWorld = createServerWorld({ protocol, transport: serverTransport, clock });
-const clientWorld = createClientWorld({ protocol, transport: clientTransport, clock });
+const serverWorld = createServerWorld({ protocol, transport: serverTransport });
+const clientWorld = createClientWorld({ protocol, transport: clientTransport });
 
 serverWorld.add(WorldEntity, MatchState);
 
@@ -330,7 +328,6 @@ const clientWorld = createClientWorld({
   protocol,
   localComponents: [DebugTag],
   transport: clientTransport,
-  clock,
 });
 ```
 

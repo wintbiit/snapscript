@@ -6,7 +6,6 @@ import {
   qf32,
   u16,
   type ChannelName,
-  type Clock,
   type ComponentSchema,
   type ServerTransport,
   type PeerRef,
@@ -86,17 +85,6 @@ class BenchServerTransport implements ServerTransport {
   receive(peer: PeerRef, channel: ChannelName, bytes: Uint8Array): void {
     this.#handler?.(peer, channel, bytes);
   }
-}
-
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
 }
 
 const benchProtocol = defineProtocol({
@@ -541,19 +529,18 @@ describe("benchmark baselines", () => {
       const host = createServerWorld({
         protocol,
         transport,
-        clock: clock(),
       });
       for (let i = 0; i < 1_000; i += 1) {
         const entity = host.spawn();
         host.add(entity, Position, { x: i, y: -i });
         host.add(entity, Velocity, { x: 1, y: -1 });
       }
-      host.tick();
+      host.tick(16);
       transport.sent.splice(0);
       const fanout = sample(() => {
         transport.sent.splice(0);
         moveAll(host);
-        host.tick();
+        host.tick(16);
         return {
           packets: transport.sent.length,
           bytes: transport.sent.reduce((total, packet) => total + packet.bytes.byteLength, 0),

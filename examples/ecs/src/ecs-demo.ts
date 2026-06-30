@@ -13,7 +13,6 @@ import {
   varu32,
   type ChannelName,
   type ClientTransport,
-  type Clock,
   type ComponentQuery,
   type EntityRef,
   type ServerTransport,
@@ -91,14 +90,10 @@ export interface DemoSnapshot {
   readonly benchmark: string;
 }
 
-export class BrowserClock implements Clock {
+export class FrameCounter {
   #tick = 0;
 
-  nowMs(): number {
-    return performance.now();
-  }
-
-  tick(): number {
+  advance(_deltaTime: number): number {
     this.#tick += 1;
     return this.#tick;
   }
@@ -242,7 +237,7 @@ class WebSocketTransport implements EcsDemoTransport {
 }
 
 export class ServerDemo {
-  readonly clock: BrowserClock;
+  readonly frames: FrameCounter;
   readonly #transport: EcsDemoTransport;
   readonly world: ServerWorld;
   readonly player: EntityRef;
@@ -250,13 +245,12 @@ export class ServerDemo {
   #lastEvent: string | undefined;
   #benchmark = "--";
 
-  constructor(transport: EcsDemoTransport = new WebSocketTransport(), clock = new BrowserClock()) {
+  constructor(transport: EcsDemoTransport = new WebSocketTransport(), frames: FrameCounter = new FrameCounter()) {
     this.#transport = transport;
-    this.clock = clock;
+    this.frames = frames;
     this.world = createServerWorld({
       protocol,
       transport: this.#transport,
-      clock: this.clock,
       // Keep the example's interest model explicit: every entity is visible to every peer.
       visibility: "all",
       // Opt into the negotiated batched snapshot path used by query-heavy ECS examples.
@@ -317,8 +311,9 @@ export class ServerDemo {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   runBenchmark(): void {
@@ -326,7 +321,6 @@ export class ServerDemo {
     const bench = createServerWorld({
       protocol,
       transport: this.#transport,
-      clock: this.clock,
     });
     for (let i = 0; i < 1000; i += 1) {
       const entity = bench.spawn();
@@ -346,7 +340,7 @@ export class ServerDemo {
     return {
       connected: this.#transport.connected,
       error: this.#transport.error,
-      tick: this.clock.peek(),
+      tick: this.frames.peek(),
       sent: this.#transport.sent,
       received: this.#transport.received,
       lastChannel: this.#transport.lastChannel,
@@ -362,16 +356,16 @@ export class ServerDemo {
 }
 
 export class ClientDemo {
-  readonly clock: BrowserClock;
+  readonly frames: FrameCounter;
   readonly #transport: EcsDemoTransport;
   readonly world: ClientWorld;
   #lastEvent: string | undefined;
   #benchmark = "--";
 
-  constructor(transport: EcsDemoTransport = new WebSocketTransport(), clock = new BrowserClock()) {
+  constructor(transport: EcsDemoTransport = new WebSocketTransport(), frames: FrameCounter = new FrameCounter()) {
     this.#transport = transport;
-    this.clock = clock;
-    this.world = createClientWorld({ protocol, transport: this.#transport, clock: this.clock });
+    this.frames = frames;
+    this.world = createClientWorld({ protocol, transport: this.#transport });
 
     this.world.onEvent(DamageEvent, (ctx) => {
       const payload = ctx.payload;
@@ -384,8 +378,9 @@ export class ClientDemo {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   move(dx: number, dy: number): void {
@@ -410,7 +405,7 @@ export class ClientDemo {
     return {
       connected: this.#transport.connected,
       error: this.#transport.error,
-      tick: this.clock.peek(),
+      tick: this.frames.peek(),
       sent: this.#transport.sent,
       received: this.#transport.received,
       lastChannel: this.#transport.lastChannel,

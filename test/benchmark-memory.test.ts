@@ -5,7 +5,6 @@ import {
   createServerWorld,
   qf32,
   type ChannelName,
-  type Clock,
   type ServerTransport,
   type ServerWorld,
   type PeerRef,
@@ -97,23 +96,11 @@ class MemoryServerTransport implements ServerTransport {
   }
 }
 
-function clock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
-}
-
 function buildWorld(entityCount: number, _storage: BenchmarkStorage | undefined): ServerWorld {
   const world = createServerWorld(
     {
       protocol: memProtocol,
       transport: new MemoryServerTransport(),
-      clock: clock(),
     },
   );
 

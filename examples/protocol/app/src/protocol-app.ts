@@ -10,7 +10,6 @@ import type {
   ChannelName,
   ClientWorld,
   ClientTransport,
-  Clock,
   PeerRef,
   ReadonlyEntityRef,
   ReplicatedStateReader,
@@ -53,14 +52,10 @@ interface ClientSnapshot {
   readonly players: readonly PlayerView[];
 }
 
-class BrowserClock implements Clock {
+class FrameCounter {
   #tick = 0;
 
-  nowMs(): number {
-    return performance.now();
-  }
-
-  tick(): number {
+  advance(_deltaTime: number): number {
     this.#tick += 1;
     return this.#tick;
   }
@@ -177,19 +172,19 @@ class WebSocketTransport implements ClientTransport, ServerTransport {
 }
 
 export class ServerPeer {
-  readonly clock = new BrowserClock();
+  readonly frames = new FrameCounter();
   readonly #transport = new WebSocketTransport();
   readonly world = createServer({
     transport: this.#transport,
-    clock: this.clock,
   });
 
   connect(url: string): void {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   sendFull(): void {
@@ -201,7 +196,7 @@ export class ServerPeer {
       readServerSnapshot(this.world),
       this.#transport.connected,
       this.#transport.error,
-      this.clock.peek(),
+      this.frames.peek(),
       this.#transport.lastSentBytes,
       undefined,
       undefined,
@@ -214,11 +209,10 @@ export class ServerPeer {
 }
 
 export class ClientPeer {
-  readonly clock = new BrowserClock();
+  readonly frames = new FrameCounter();
   readonly #transport = new WebSocketTransport();
   readonly world = createClient({
     transport: this.#transport,
-    clock: this.clock,
   });
   #lastEvent: string | undefined;
 
@@ -226,8 +220,9 @@ export class ClientPeer {
     this.#transport.connect(url);
   }
 
-  tick(): void {
-    this.world.tick();
+  tick(deltaTime = 16): void {
+    this.frames.advance(deltaTime);
+    this.world.tick(deltaTime);
   }
 
   move(dx: number, dy: number): void {
@@ -250,7 +245,7 @@ export class ClientPeer {
       readClientSnapshot(this.world),
       this.#transport.connected,
       this.#transport.error,
-      this.clock.peek(),
+      this.frames.peek(),
       this.#transport.lastReceivedBytes,
       this.#lastEvent,
       this.world.myPeerId(),

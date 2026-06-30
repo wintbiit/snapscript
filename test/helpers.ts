@@ -4,7 +4,6 @@ import {
   defineProtocol,
   type CommandDefinition,
   type ChannelName,
-  type Clock,
   type ClientTransport,
   type ComponentSchema,
   type EventDefinition,
@@ -27,17 +26,6 @@ class NullServerTransport implements ServerTransport {
 class NullClientTransport implements ClientTransport {
   send(_channel: ChannelName, _bytes: Uint8Array): void {}
   onPacket(_cb: (channel: ChannelName, bytes: Uint8Array) => void): void {}
-}
-
-export function testClock(): Clock {
-  let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  };
 }
 
 type ProtocolItem =
@@ -75,7 +63,6 @@ export function createTestServerWorld(protocol: ProtocolDefinition = defineProto
   return createServerWorld({
     protocol,
     transport: new NullServerTransport(),
-    clock: testClock(),
   });
 }
 
@@ -83,7 +70,6 @@ export function createTestClientWorld(protocol: ProtocolDefinition = defineProto
   return createClientWorld({
     protocol,
     transport: new NullClientTransport(),
-    clock: testClock(),
   });
 }
 

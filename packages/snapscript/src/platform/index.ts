@@ -61,12 +61,6 @@ export function createMemoryTransportPair(): MemoryTransportPair {
   };
 }
 
-/** Clock used by a world to produce frame timing and monotonically increasing network ticks. */
-export interface Clock {
-  nowMs(): number;
-  tick(): number;
-}
-
 /** Structured logger used for isolated handler and packet errors. */
 export interface ILogger {
   debug?(message: string, context?: Record<string, unknown>): void;

@@ -3,7 +3,7 @@ import { createClientWorld, createServerWorld, defineComponent, defineEntity, qf
 import { createRegistry } from "../packages/snapscript/src/registry/index";
 import { applySnapshot, encodeDirty } from "../packages/snapscript/src/sync/index";
 import { worldInternals } from "../packages/snapscript/src/world/internals";
-import { createTestClientWorld, createTestServerWorld, testClientTransport, testClock, testProtocol, testServerTransport } from "./helpers";
+import { createTestClientWorld, createTestServerWorld, testClientTransport, testProtocol, testServerTransport } from "./helpers";
 
 describe("world and NetRef", () => {
   it("marks changed local refs dirty", () => {
@@ -125,13 +125,11 @@ describe("world and NetRef", () => {
       protocol,
       localComponents: [Local],
       transport: testServerTransport(),
-      clock: testClock(),
     });
     const client = createClientWorld({
       protocol,
       localComponents: [Local],
       transport: testClientTransport(),
-      clock: testClock(),
     });
 
     const serverEntity = server.spawn(Local, { hp: 80 });
@@ -150,7 +148,6 @@ describe("world and NetRef", () => {
         protocol: testProtocol(),
         localComponents: [Replicated],
         transport: testServerTransport(),
-        clock: testClock(),
       }),
     ).toThrow(/localComponents/);
     expect(() =>
@@ -158,7 +155,6 @@ describe("world and NetRef", () => {
         protocol: testProtocol(),
         localComponents: [Local, Local],
         transport: testClientTransport(),
-        clock: testClock(),
       }),
     ).toThrow(/duplicate local component/);
   });
@@ -172,7 +168,6 @@ describe("world and NetRef", () => {
       protocol,
       localComponents: [Local],
       transport: testClientTransport(),
-      clock: testClock(),
     });
     const replicatedEntity = server.spawn(Replicated);
     applySnapshot(client, encodeDirty(server, 1), createRegistry().registerComponent(Replicated.component));

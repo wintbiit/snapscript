@@ -58,8 +58,9 @@ Command streams are client-to-server input streams:
 streams.Player.MoveStream(clientWorld, playerEntity, payload, clientTick, dtMs);
 ```
 
-Stream calls enqueue samples. `ClientWorld.tick()` flushes dirty stream queues during the `network`
-phase. Streams use the unreliable channel internally and have their own packet/ack path.
+Stream calls enqueue samples. `ClientWorld.tick(deltaTime)` flushes dirty stream queues during the
+`network` phase. Streams use the unreliable channel internally and have their own packet/ack path.
+`deltaTime` is measured in milliseconds.
 
 ### Entities
 
@@ -83,8 +84,8 @@ If a protocol payload carries an entity id, resolve it to an entity ref before c
 Projects create worlds directly or through generated core helpers:
 
 ```ts
-const serverWorld = createServerWorld({ protocol, transport, clock });
-const clientWorld = createClientWorld({ protocol, transport, clock });
+const serverWorld = createServerWorld({ protocol, transport });
+const clientWorld = createClientWorld({ protocol, transport });
 ```
 
 Both world factories also accept `localComponents` for non-replicated ECS state:
@@ -96,7 +97,6 @@ const serverWorld = createServerWorld({
   protocol,
   localComponents: [ServerOnly],
   transport,
-  clock,
 });
 ```
 
@@ -119,12 +119,17 @@ only when gameplay code needs to display or persist the numeric connection id.
 
 Endpoint RPC facade files call public world methods such as `sendCommand`, `onCommand`,
 `broadcastEvent`, `sendEventTo`, `broadcastPeerEvent`, `sendPeerEventTo`, `onEvent`,
-`pushCommandStream`, and `onCommandStream`. These methods remain available for direct integrations,
+  `pushCommandStream`, and `onCommandStream`. These methods remain available for direct integrations,
 but generated projects should prefer the facade.
 
 The older direct helpers `send`, `on`, `broadcast`, and `sendTo` are not part of the public
 `ServerWorld`/`ClientWorld` type surface. Handwritten protocols should use the endpoint-addressed
 methods above with explicit `WorldEntity`, PeerEntity, or gameplay entity refs.
+
+Worlds maintain their own frame clock. Hosts drive simulation cadence by calling
+`world.tick(deltaTime)`, where `deltaTime` is measured in milliseconds. The same internal clock
+produces `SystemContext.tick`, `SystemContext.dtMs`, `SystemContext.nowMs`, and the network packet
+tick used by snapshots/RPCs.
 
 ## Schema API
 
@@ -191,7 +196,6 @@ import {
   ServerPeerId,
   type ChannelName,
   type ClientTransport,
-  type Clock,
   type Logger,
   type PeerId,
   type PeerRef,

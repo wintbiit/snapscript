@@ -48,8 +48,8 @@ const pageTitle = computed(() => {
 let frame = 0;
 
 function refresh() {
-  server?.tick();
-  client?.tick();
+  server?.tick(16);
+  client?.tick(16);
   peerState.value = server?.snapshot() ?? client?.snapshot() ?? peerState.value;
 }
 
@@ -80,7 +80,7 @@ function n(value: number | undefined, digits = 0): string {
     <header class="topbar">
       <div>
         <h1>{{ pageTitle }}</h1>
-        <p v-if="mode === 'home'">Open Server and Client in separate browser pages. The app package supplies WebSocket, clock, input, and rendering; the core package owns .snap, RPC handlers, and systems.</p>
+        <p v-if="mode === 'home'">Open Server and Client in separate browser pages. The app package supplies WebSocket, input, and rendering; the core package owns .snap, RPC handlers, and systems.</p>
         <p v-else-if="mode === 'server'">Server world created through the generated core package. Command handlers live under core/src/logic/server.</p>
         <p v-else>Client world created through the generated core package. Buttons send typed commands from generated protocol exports.</p>
       </div>

@@ -15,7 +15,7 @@ npm create snapscript@latest my-game-core -- --schema ../game.snap
 ```
 
 The generated package owns protocol definitions, generated facades, server/client world factories,
-systems, tests, and RPC handlers. Platform projects provide transport, clocks, input, rendering, and
+systems, tests, and RPC handlers. Platform projects provide transports, input, rendering, and
 deployment.
 
 ## Docs

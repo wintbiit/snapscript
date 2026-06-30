@@ -81,13 +81,6 @@ let tick = 0;
 const world = createClientWorld({
   protocol,
   transport,
-  clock: {
-    nowMs: () => Date.now(),
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
-  },
 });
 
 world.onEvent(DamageEvent, (ctx) => {
@@ -96,7 +89,8 @@ world.onEvent(DamageEvent, (ctx) => {
 
 let sentDamage = false;
 const interval = setInterval(() => {
-  world.tick();
+  tick += 1;
+  world.tick(100);
   const player = world.get(1, Player);
   if (player !== undefined) {
     console.log(

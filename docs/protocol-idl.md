@@ -236,8 +236,9 @@ Command streams are client-to-server only and use the unreliable channel interna
 streams.Player.MoveStream(clientWorld, playerEntity, payload, clientTick, dtMs);
 ```
 
-The facade call queues a sample. `ClientWorld.tick()` runs the `network` phase and then flushes dirty
-stream queues, so multiple samples pushed in one frame can be batched into one command-stream packet.
+The facade call queues a sample. `ClientWorld.tick(deltaTime)` runs the `network` phase and then
+flushes dirty stream queues, so multiple samples pushed in one frame can be batched into one
+command-stream packet. `deltaTime` is measured in milliseconds.
 
 Generated server handlers receive `CommandStreamCtx<TPayload>` with ordered samples. Streams use
 `MessageType.CommandStream`, minimal ack packets, per-stream sequence tracking, and client

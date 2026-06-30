@@ -16,7 +16,6 @@ import {
   varu32,
   type ChannelName,
   type ClientTransport,
-  type Clock,
   type EntityRef,
   type PeerRef,
   type Logger,
@@ -121,14 +120,11 @@ function pair(): [ManualTransport, ManualTransport] {
   return [a, b];
 }
 
-function clock(): Clock {
+function tickSource(): () => number {
   let tick = 0;
-  return {
-    nowMs: () => tick * 16,
-    tick: () => {
-      tick += 1;
-      return tick;
-    },
+  return () => {
+    tick += 1;
+    return tick;
   };
 }
 
@@ -164,7 +160,7 @@ describe("sync runtime", () => {
     createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       protocolHash: "server",
       logger: {
@@ -174,7 +170,7 @@ describe("sync runtime", () => {
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       protocolHash: "client",
     });
@@ -199,13 +195,13 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
 
@@ -230,11 +226,11 @@ describe("sync runtime", () => {
     const clientWorld = createTestClientWorld(protocol);
     const player = serverWorld.spawn(Player);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     client.start();
@@ -263,8 +259,8 @@ describe("sync runtime", () => {
       scores: [3, 4],
     });
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
-    const client = createSyncClient({ world: clientWorld, transport: clientTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
+    const client = createSyncClient({ world: clientWorld, transport: clientTransport, getTick: tickSource(), registry });
 
     client.start();
     expect(clientWorld.get(entity, Profile)?.name.value).toBe("alice");
@@ -296,11 +292,11 @@ describe("sync runtime", () => {
     const clientWorld = createTestClientWorld(protocol);
     const player = serverWorld.spawn(Player);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     host.on(Move, (ctx) => {
@@ -326,11 +322,11 @@ describe("sync runtime", () => {
     const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     let commandSource = ServerPeerId;
@@ -360,12 +356,10 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
     });
     const gameplayEntity = serverWorld.spawn();
     let sourceId = 0;
@@ -376,9 +370,9 @@ describe("sync runtime", () => {
       sourcePeerId = serverWorld.peerId(ctx.source);
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     const peerEntity = clientWorld.myPeerEntity();
     expect(clientWorld.myPeerId()).toBe(1);
@@ -388,14 +382,14 @@ describe("sync runtime", () => {
     expect(clientWorld.get(peerEntity, PeerState)?.peerId.value).toBe(1);
 
     clientWorld.sendCommand(WorldEntity, Ping, {});
-    serverWorld.tick();
+    serverWorld.tick(16);
 
     expect(sourceId).toBe(peerEntity.id);
     expect(sourcePeerId).toBe(1);
     expect(serverWorld.has({ id: sourceId }, Peer)).toBe(true);
 
     serverTransport.connected = false;
-    serverWorld.tick();
+    serverWorld.tick(16);
     expect(serverWorld.peerStatus({ id: sourceId })).toBe(PeerStatus.Disconnected);
     expect(serverWorld.get({ id: sourceId }, PeerState)?.status.value).toBe(PeerStatus.Disconnected);
   });
@@ -412,12 +406,10 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
     });
     const player = serverWorld.spawn(Player);
     const batches: string[] = [];
@@ -429,23 +421,23 @@ describe("sync runtime", () => {
       );
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
     expect(batches).toEqual([]);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
 
     expect(batches).toEqual([
       `${clientWorld.myPeerEntity().id}->${player.id}:1/10/16/0.25,2/11/16/0.5`,
     ]);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.75 }, 12, 16);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
     const ack = decodeCommandStreamAck(serverTransport.packets.at(-1)!);
     expect(ack.streamId).toBe(MoveStream.rpcId);
     expect(ack.targetId).toBe(player.id);
@@ -468,13 +460,11 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
       streamLimits: { maxStreamsPerPeer: 1 },
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
       streamLimits: { maxStreamsPerPeer: 1 },
     });
     const player = serverWorld.spawn(Player);
@@ -486,20 +476,20 @@ describe("sync runtime", () => {
       batches.push(`stream:${ctx.stream.name}`);
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
     expect(() =>
       clientWorld.pushCommandStream(player, AimStream, { dx: 0.5 }, 11, 16),
     ).toThrow(/exceed maxStreamsPerPeer \(1\)/);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
 
     expect(batches).toEqual(["stream:RuntimeMoveStreamLimit"]);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
     expect(batches).toEqual(["stream:RuntimeMoveStreamLimit"]);
   });
 
@@ -524,7 +514,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       logger,
       streamLimits: { maxStreamsPerPeer: 1 },
@@ -569,13 +559,11 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
       streamLimits: { maxPendingSamples: 2 },
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
       streamLimits: { maxPendingSamples: 2 },
     });
     const player = serverWorld.spawn(Player);
@@ -584,15 +572,15 @@ describe("sync runtime", () => {
       batches.push(`samples:${ctx.samples.length}`);
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.75 }, 12, 16);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
 
     expect(batches).toEqual(["samples:2"]);
   });
@@ -609,13 +597,11 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
       streamLimits: { maxSamplesPerPacket: 1 },
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
       streamLimits: { maxSamplesPerPacket: 1 },
     });
     const player = serverWorld.spawn(Player);
@@ -626,14 +612,14 @@ describe("sync runtime", () => {
       );
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.25 }, 10, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.5 }, 11, 16);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
 
     expect(batches).toEqual(["2/0.5"]);
   });
@@ -650,13 +636,11 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: serverTransport,
-      clock: clock(),
       streamLimits: { maxSamplesPerPacket: 2 },
     });
     const clientWorld = createClientWorld({
       protocol,
       transport: clientTransport,
-      clock: clock(),
       streamLimits: { maxSamplesPerPacket: 2 },
     });
     const player = serverWorld.spawn(Player);
@@ -665,20 +649,20 @@ describe("sync runtime", () => {
       batches.push(ctx.samples.map((sample) => `${sample.sequence}/${sample.payload.dx.toFixed(1)}`).join(","));
     });
 
-    clientWorld.tick();
-    serverWorld.tick();
-    clientWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
+    clientWorld.tick(16);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.1 }, 10, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.2 }, 11, 16);
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.3 }, 12, 16);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
     expect(batches).toEqual(["2/0.2,3/0.3"]);
 
     clientWorld.pushCommandStream(player, MoveStream, { dx: 0.4 }, 13, 16);
-    clientWorld.tick();
-    serverWorld.tick();
+    clientWorld.tick(16);
+    serverWorld.tick(16);
     expect(batches).toEqual(["2/0.2,3/0.3", "4/0.4"]);
   });
 
@@ -696,7 +680,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const player = serverWorld.spawn(Player);
@@ -746,7 +730,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const player = serverWorld.spawn(Player);
@@ -791,7 +775,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const playerA = serverWorld.spawn(Player);
@@ -858,14 +842,14 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       logger,
     });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const handler = vi.fn();
@@ -898,11 +882,11 @@ describe("sync runtime", () => {
     const clientWorld = createTestClientWorld(protocol);
     const player = serverWorld.spawn(Player);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
 
@@ -938,11 +922,11 @@ describe("sync runtime", () => {
     const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
 
@@ -979,7 +963,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       logger: {
         error: (message, context) => errors.push(`${message}:${String(context?.rpc)}:${String(context?.error)}`),
@@ -988,7 +972,7 @@ describe("sync runtime", () => {
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     let handled = false;
@@ -1017,13 +1001,13 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport: serverTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     try {
@@ -1055,11 +1039,11 @@ describe("sync runtime", () => {
     const serverWorld = createTestServerWorld(protocol);
     const clientWorld = createTestClientWorld(protocol);
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     let received = 0;
@@ -1081,12 +1065,12 @@ describe("sync runtime", () => {
     const serverWorld = createTestServerWorld(testProtocol(Damage));
     const clientWorld = createTestClientWorld(testProtocol(Damage));
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const errors: string[] = [];
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       logger: {
         error: (message, context) => errors.push(`${message}:${String(context?.rpc)}:${String(context?.error)}`),
@@ -1114,11 +1098,11 @@ describe("sync runtime", () => {
     const serverWorld = createTestServerWorld(testProtocol(Damage));
     const clientWorld = createTestClientWorld(testProtocol(Damage));
     const [serverTransport, clientTransport] = pair();
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     const client = createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
     });
     const seen: string[] = [];
@@ -1152,11 +1136,11 @@ describe("sync runtime", () => {
     const logger: Logger = {
       error: (message, context) => errors.push(`${message}:${String(context?.error)}`),
     };
-    const host = createSyncServer({ world: serverWorld, transport: serverTransport, clock: clock(), registry });
+    const host = createSyncServer({ world: serverWorld, transport: serverTransport, getTick: tickSource(), registry });
     createSyncClient({
       world: clientWorld,
       transport: clientTransport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       logger,
     });
@@ -1183,7 +1167,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       isVisible: (peer) => visible.get(peer) ?? true,
     });
@@ -1227,7 +1211,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       isVisible: (peerId) => peerId === 1,
     });
@@ -1268,7 +1252,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       isVisible: (peerId, entityId) => entityId !== player.id || peerId === 1,
     });
@@ -1296,14 +1280,13 @@ describe("sync runtime", () => {
     const serverWorld = createServerWorld({
       protocol,
       transport: new PeerServerTransport(),
-      clock: clock(),
     });
     const transport = new PeerServerTransport();
     const peerEntities = new Map<number, number>();
     const host = createSyncServer({
       world: serverWorld,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       ensurePeerEntity(peerId) {
         const existing = peerEntities.get(peerId);
@@ -1348,7 +1331,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world: serverWorld,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       isVisible: (targetPeer) => visible.get(targetPeer) ?? true,
     });
@@ -1383,7 +1366,7 @@ describe("sync runtime", () => {
     const existing = world.spawn(Player);
     const transport = new PeerServerTransport();
     const peer = "peer";
-    const host = createSyncServer({ world, transport, clock: clock(), registry });
+    const host = createSyncServer({ world, transport, getTick: tickSource(), registry });
     host.update();
 
     transport.receive(peer, "reliable", encodeControl(ControlType.Hello, 1));
@@ -1410,7 +1393,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       snapshotEncoding: "batched",
     });
@@ -1453,7 +1436,7 @@ describe("sync runtime", () => {
     const host = createSyncServer({
       world,
       transport,
-      clock: clock(),
+      getTick: tickSource(),
       registry,
       snapshotEncoding: "batched",
     });
@@ -1477,5 +1460,3 @@ describe("sync runtime", () => {
     expect(reader.readU8()).toBe(SnapshotOp.UpdateComponent);
   });
 });
-
-
